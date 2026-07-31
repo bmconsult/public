@@ -1420,7 +1420,51 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
 #p-led .lg-ev:last-child{border-bottom:0}
 #p-led .lg-ev .t{color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 #p-led .lg-ev .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#p-led .lscroll{max-height:320px;overflow:auto;padding-right:4px}
+/* SINGLE SCREEN, and the project's own scroll treatment.
+   This shipped as `max-height:320px; overflow:auto` - a fixed pixel height and a visible bar, in an
+   application that has neither anywhere else (nine other panels use the pattern below). Two of the
+   rules it broke were already written down: P3 says fit by sizing the CONTAINER to the window
+   rather than trimming content, and N4 says deep panels wheel-scroll with no bar so a full panel
+   and an empty one have identical geometry. A default scrollbar is not a neutral choice, it is a
+   conceded one.
+   `flex:1; min-height:0` makes these the shock absorbers (N3) - they take the deficit so the page
+   as a whole stays on one screen, which is what makes a web-tech surface read as software rather
+   than as a document. */
+#p-led{display:flex;flex-direction:column;min-height:0}
+/* `align-items:stretch` is the whole fix, and it took a measurement to find.
+   .g2 inherits `align-items:start` globally, which means grid items size to their CONTENT rather
+   than to the row. Measured live: the grid row was 118 px and the card inside it was 8042 px. Every
+   rule underneath — the card's overflow:hidden, .lscroll's flex:1, its min-height:0 — was inert,
+   because none of them can shrink a box that was never given a height to shrink INTO. The card then
+   painted 7900 px straight out of its cell and through everything below it.
+   Same family as N2 ("min-height:100% is a FLOOR — clamping the CONTAINER is what makes every
+   shrink rule below it load-bearing") and the implicit-grid ratchet: an unclamped track cannot be
+   fixed by tuning what sits inside it. Here the track was clamped and the ITEM was opted out of it. */
+#p-led .g2{flex:1 1 0;min-height:0;align-items:stretch}
+/* `overflow:hidden` is doing the load-bearing work here, not the flex properties.
+   Without it these cards had `min-height:0` (which PERMITS the squeeze) and visible overflow
+   (which turns the squeeze into a COLLISION rather than a scroll) - O1's three outcomes, landing
+   on the worst one. The footer note painted straight through the cycle rows underneath it.
+   Clipping here is safe precisely because .lscroll below scrolls: nothing is lost, it moves into
+   the wheel region. And per O2, hidden under flex also drops these to min-height:auto -> 0, which
+   is what finally lets them absorb the deficit instead of pushing the page past one screen. */
+#p-led .g2 > .card{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#p-led > .card:last-child{flex:none}
+/* Floor low, not comfortable: a 120px floor on two stacked panels is 240px this page cannot always
+   spare, and a floor that cannot be honoured reintroduces the overflow it was meant to prevent. */
+#p-led .lscroll{flex:1 1 auto;min-height:64px;overflow-y:auto;
+  scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+#p-led .lscroll::-webkit-scrollbar{width:0;height:0}
+/* The findings table is bounded too, or a machine with forty distinct findings pushes everything
+   below it off screen. Bounded, not capped: every row is present and reachable by wheel. */
+/* Three scroll regions SHARING the height, rather than one fixed slab starving the other two.
+   A `max-height:min(34vh,300px)` here fitted the page and left the panels below at 65 px - two
+   rows each, technically one screen and practically useless. Proportional flex gives every region
+   a usable share at any window size, which is what "fit to the window" was supposed to mean. */
+#p-led .lgcard{flex:1.25 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+#p-led .lg-table{flex:1 1 auto;min-height:0;overflow-y:auto;
+  scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+#p-led .lg-table::-webkit-scrollbar{width:0;height:0}
 #p-led .muted2{color:var(--ink-3)}
 
 #toast{
@@ -3094,9 +3138,20 @@ RENDER.led=async()=>{
       :l.kind==='ctl'?`dial ${esc((d.params&&d.params.act)||d.act||'')}`
       :l.kind==='restart-app'?`restarted ${esc(d.name||'')}`
       :esc(l.kind);};
-  /* Long dial sessions tag every finding open at the time with every pull — 18 dial tweaks on one
-     battery note is a true record but an unreadable cell. Newest few + an honest count. */
-  const levList=ls=>{const t=ls.map(levTxt); return (t.length>4?`<span class="muted2">+${t.length-4} more · </span>`:'')+t.slice(-4).join(' · ');};
+  /* A SUMMARY CELL COUNTS; IT DOES NOT ENUMERATE.
+     This was `+15 more · ` followed by the newest four joined with dots, which broke two rules at
+     once. P2: a count you cannot open is worse than no count — "+15 more" states precisely what the
+     reader is being denied. And a dot-joined run of records is a table that lost its nerve; rows
+     are rows, and if they do not fit, the container is wrong rather than the content.
+     The resolution is that the full list is ALREADY on this screen: the Levers panel renders every
+     one as its own row. So this cell says how many there were and stops. That is a fact pointing at
+     something present, not a count withheld — which is the whole difference. */
+  const levList=(ls)=>{
+    const n=ls.length;
+    if(!n) return '<span class="muted2">no lever pulled</span>';
+    if(n===1) return levTxt(ls[0]);
+    return `<span class="muted2">${n} levers</span> <span class="muted2">· see Levers</span>`;
+  };
   /* Δ of C: free across one cycle — rendered ONLY when both endpoints were recorded. `m0` is the
      metric snapshot at fire, `m` at clear; a missing side is a dash, never a zero. */
   const dFree=c=>(c&&c.m0&&c.m&&typeof c.m0.freeGB==='number'&&typeof c.m.freeGB==='number')?+(c.m.freeGB-c.m0.freeGB).toFixed(1):null;
@@ -3183,9 +3238,9 @@ RENDER.led=async()=>{
         <div class="hs">${cleans.length?`across ${cleans.length} measured cleanups — including the ones that returned nothing.`:'kills, dials, task toggles and cleanups, each ledgered with a metric snapshot.'}</div>
       </div>
     </div>
-    <div class="card"><h3>What has fired here <span class="muted">· by count</span></h3>
+    <div class="card lgcard"><h3>What has fired here <span class="muted">· by count</span></h3>
       <div class="lg-row h"><span>finding</span><span>fired</span><span>typical clear</span><span>stays clear</span><span>status</span><span>last cycle</span></div>
-      ${ids.map(frow).join('')}</div>
+      <div class="lg-table">${ids.map(frow).join('')}</div></div>
     <div class="g2" style="grid-template-columns:1.35fr 1fr">
       <div class="card" style="margin-bottom:0"><h3>Every cycle <span class="muted">· newest first · Δ is C: free, recorded at fire and at clear</span></h3>
         <div class="lscroll">${cycles.slice().reverse().map(cycRow).join('')||'<div class="empty">no completed cycles yet</div>'}</div></div>
