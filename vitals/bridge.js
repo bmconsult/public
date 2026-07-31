@@ -55,6 +55,10 @@ const { PS, PS_ARGS } = require('./pshost');
  * WSL through Windows interop. The one Linux available was the one Linux where every PowerShell
  * dependency is invisible. A passing suite there proves nothing about a real Linux desktop. */
 const PS_HOST = process.platform === 'win32';
+/* The native action layer for the other two platforms: kill / clean / restart-an-app in Node and
+   osascript, same route contracts as the PowerShell one-shots. Loaded only off Windows - on
+   Windows the PowerShell paths below remain the reference implementation, untouched. */
+const posixActs = PS_HOST ? null : require('./actions-posix');
 
 /* ================= MODE: what this install is allowed to DO =================
  *
@@ -110,6 +114,7 @@ const ACTION_ROUTES = new Set([
   '/api/reveal',        // open Explorer at a path
   '/api/openrecycle',
   '/api/mftscan',       // spawns an ELEVATED scan
+  '/api/growthscan',    // walks the tree and writes a snapshot of the owner's folders
   '/api/iotrace',       // spawns an ELEVATED trace
   '/api/clip',          // starts a background clipboard watcher
   '/api/files',         // filetools: reveal / lock-holder actions
@@ -312,8 +317,11 @@ function raiseWindow(pid) {
 const WINDOWS_ONLY_ROUTES = new Set([
   '/api/startup', '/api/processes', '/api/conns', '/api/netinfo', '/api/nettest',
   '/api/battreport', '/api/bigdirs', '/api/reclaim', '/api/clean', '/api/kill', '/api/restartapp',
-  '/api/mft', '/api/mftscan', '/api/scanlog', '/api/iotrace', '/api/growth', '/api/files',
+  '/api/mft', '/api/mftscan', '/api/scanlog', '/api/iotrace', '/api/files',
   '/api/task', '/api/clip', '/api/reveal', '/api/openrecycle',
+  /* '/api/growth' LEFT THIS LIST 2026-07-31: it is pure Node (it diffs snapshots), it answers an
+     honest {need:2, have:N} when no snapshots exist, and growthscan.js now produces snapshots on
+     any platform - so the dependency argument that once justified gating it is gone. */
   /* The CTRL page has three routes, not one. Listing only '/api/ctl' left the page's own state
      fetch and its restore action falling through to a raw ENOENT 500. */
   '/api/ctl', '/api/ctl/state', '/api/ctl/restore',
@@ -328,6 +336,21 @@ const WINDOWS_ONLY_ROUTES = new Set([
      instead of from the router. */
 ]);
 
+/* Routes from the set above that now have a NATIVE implementation on a non-Windows platform.
+   The route stays in WINDOWS_ONLY_ROUTES - that list is the inventory of what the WINDOWS build
+   implements as PowerShell, and test-routes.js audits it against the router - and this map is the
+   per-platform exception: listed here, the gate lets the request through to the handler, whose
+   helper dispatches to actions-posix.js. A platform absent from this map, or a route absent from
+   its set, still gets the honest 501.
+   NOT wired to caps.js on purpose: a flag there means "verified on this platform", and these
+   implementations have never run on their platforms. Route reachable, capability unclaimed -
+   that is the same two-act split cpu.perCore documents in the darwin manifest. */
+const PORTED_ROUTES = {
+  darwin: new Set(['/api/kill', '/api/clean', '/api/restartapp']),
+  linux: new Set(['/api/kill', '/api/clean']),   // restartApp needs osascript; no Linux equivalent yet
+};
+const PORTED_HERE = PORTED_ROUTES[process.platform] || new Set();
+
 /* A route that cannot work here says so, with the reason and what would be needed - rather than
    surfacing `spawn powershell.exe ENOENT` as a 500 and letting the page look broken. */
 function psOnly(res, feature) {
@@ -341,6 +364,9 @@ function psOnly(res, feature) {
 
 let latest = null;         // most recent tick
 let staticInfo = null;     // one-time machine description
+/* One walker at a time. Two concurrent walks of the same tree would race each other's snapshots
+   and halve each other's I/O; the route answers 409 instead. */
+let growthScanState = { running: false, startedAt: 0, root: null, last: null };
 let lhm = null;            // LibreHardwareMonitor sensors, if it's running
 const clients = new Set();
 
@@ -695,6 +721,9 @@ const NEVER_RESTART = new Set(['system', 'registry', 'idle', 'csrss', 'wininit',
   'audiodg', 'conhost', 'node', 'powershell']);
 
 function restartApp(name, cb) {
+  /* Off Windows: resolve-the-bundle-first / graceful-quit / force-survivors / relaunch, via
+     osascript in actions-posix. Only reachable on darwin (see PORTED_ROUTES). */
+  if (!PS_HOST) return posixActs.restartApp(name, cb);
   const n = name.replace(/\.exe$/i, '').trim();
   if (!n || !/^[A-Za-z0-9 ._+-]{1,64}$/.test(n)) return cb(new Error('bad process name'));
   if (NEVER_RESTART.has(n.toLowerCase())) {
@@ -1255,6 +1284,9 @@ const SCRIPTS = {
  */
 
 function killProcess(pids, cb) {
+  /* Off Windows: SIGTERM then SIGKILL via actions-posix, with denials counted. Same route
+     contract; the PowerShell path below stays the Windows reference implementation. */
+  if (!PS_HOST) return posixActs.kill(pids, cb);
   const list = pids.filter((p) => Number.isInteger(p) && p > 4).join(',');   // never PID 0-4 (System)
   if (!list) return cb(new Error('no valid pids'));
   execFile(PS, [...PS_ARGS, '-Command',
@@ -1279,6 +1311,9 @@ const CLEANABLE = {
 };
 
 function clean(key, cb) {
+  /* Off Windows: the Node sweep in actions-posix (same fixed-table, count-the-denials contract);
+     elevated targets go through clean-admin.js behind macOS's own administrator prompt. */
+  if (!PS_HOST) return posixActs.clean(key, cb);
   const t = CLEANABLE[key];
   if (!t) return cb(new Error('not a cleanable target'));
   if (t.elevate) return cleanElevated(t.admin, cb);
@@ -1484,7 +1519,7 @@ const server = http.createServer((req, res) => {
    * the honest inventory of what this build implements as PowerShell, and it is the SAME list
    * collect/caps.js derives its action/scan capabilities from - so the manifest and the router
    * cannot drift apart and tell a user two different stories. */
-  if (!PS_HOST && WINDOWS_ONLY_ROUTES.has(p)) return psOnly(res, p);
+  if (!PS_HOST && WINDOWS_ONLY_ROUTES.has(p) && !PORTED_HERE.has(p)) return psOnly(res, p);
 
   /* THE MODE GATE, next to the platform gate and for the same reason: one place, checked before any
      handler runs, so a route added later cannot forget to ask. */
@@ -1653,6 +1688,40 @@ const server = http.createServer((req, res) => {
     const b = url.searchParams.get('old') || snaps[snaps.length - 1].file;
     return json(res, 200, hist.growth(a, b) || { error: 'could not read snapshots' });
   }
+
+  /* ---- portable growth snapshot: the walker (growthscan.js) ----
+   * The non-NTFS counterpart of /api/mftscan: walks a tree with plain fs calls and writes a
+   * walk-*.json snapshot that /api/growth diffs. Its own process, because a home-directory walk is
+   * minutes of blocking I/O and the 1 Hz tick must not stall behind it. Pure Node - deliberately
+   * NOT in WINDOWS_ONLY_ROUTES - and an ACTION_ROUTE, so viewer mode refuses it: it writes an
+   * index of the owner's folder sizes, which is exactly the class of thing viewer must not mint. */
+  if (req.method === 'POST' && p === '/api/growthscan') {
+    return readBody(req, (b) => {
+      if (growthScanState.running) {
+        return json(res, 409, { error: 'a growth scan is already running', startedAt: growthScanState.startedAt });
+      }
+      const root = b && b.root ? String(b.root) : require('os').homedir();
+      let st = null;
+      try { st = fs.statSync(root); } catch {}
+      if (!st || !st.isDirectory()) return json(res, 400, { error: 'root is not a readable directory', root });
+      const out = path.join(HIST_DIR, `walk-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
+      growthScanState = { running: true, startedAt: Date.now(), root, last: null };
+      /* 15 minutes of budget: a first walk over a large spinning-disk home can genuinely take
+         that. execFile, not spawn - its callback IS the error handler, so a missing binary cannot
+         re-create the crash class test-routes.js hunts for. */
+      execFile(process.execPath, [path.join(HERE, 'growthscan.js'), '--root', root, '--out', out],
+        { timeout: 15 * 60_000, maxBuffer: 1 << 20 }, (e, stdout) => {
+          growthScanState = {
+            running: false, startedAt: growthScanState.startedAt, root,
+            last: e ? { ok: false, err: e.message }
+                    : { ok: true, file: path.basename(out), summary: String(stdout || '').trim() },
+          };
+          if (e) console.error('[growthscan]', e.message);
+        });
+      return json(res, 200, { started: true, root, note: 'walking; minutes on a large tree. Poll GET /api/growthscan, then diff via /api/growth.' });
+    });
+  }
+  if (p === '/api/growthscan') return json(res, 200, growthScanState);
 
   if (p === '/api/diagnose') {
     const d = currentDiagnosis();

@@ -96,6 +96,8 @@ console.log('');
   check('1 disk: id', r.id, 93);
   check('1 disk: busy = 100 - id', r.busy, 7);
   check('1 disk: MB/s', r.mbs, 0.1);
+  check('1 disk: per-device row kept', r.disks.length, 1);
+  check('1 disk: per-device tps', r.disks[0].tps, 5);
 }
 {
   // two disks: their MB/s columns must be summed, and the cpu columns shift right by 3
@@ -105,6 +107,12 @@ console.log('');
   check('2 disks: us (offset shifted)', r.us, 12);
   check('2 disks: id (offset shifted)', r.id, 81);
   check('2 disks: busy', r.busy, 19);
+  /* The columns were always parsed per device and then summed away - disk.perDevice was never a
+     platform limit, only a discard. Each triple must survive individually. */
+  check('2 disks: both per-device rows kept', r.disks.length, 2);
+  check('2 disks: first device MB/s', r.disks[0].mbs, 0.1);
+  check('2 disks: second device MB/s', r.disks[1].mbs, 1.4);
+  check('2 disks: second device tps', r.disks[1].tps, 9);
 }
 {
   check('header line rejected', parseIostatLine('    KB/t  tps  MB/s  us sy id', 1), null);

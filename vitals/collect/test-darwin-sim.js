@@ -93,6 +93,23 @@ const PMSET = `Now drawing from 'Battery Power'
     "Voltage" = 11400
     "InstantAmperage" = -1850`;
 
+/* sysctl -n vm.swapusage kern.memorystatus_vm_pressure_level: swap line then the bare level.
+   512 MB of swap in use; pressure 1 = normal. */
+const SYS = `total = 4096.00M  used = 512.00M  free = 3584.00M  (encrypted)
+1`;
+
+/* pmset -g assertions: one process holding the machine out of idle sleep, by pid and name. */
+const ASSERTIONS = `Assertion status system-wide:
+   BackgroundTask                 0
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 501(caffeinate): [0x0000012c00098765] 00:12:34 PreventUserIdleSystemSleep named: "CAFFEINATE"
+   pid 137(powerd): [0x0000000d00000123] 00:00:02 InternalPreventDisplaySleep named: "com.apple.powermanagement"`;
+
+/* ioreg IOAccelerator: one adapter reporting Device Utilization. */
+const IOREG_GPU = `    "IOClass" = "AGXAcceleratorG14X"
+    "Device Utilization %" = 37`;
+
 /* ---------------- fake OS ---------------- */
 
 let shCalls = [];
@@ -102,13 +119,16 @@ function fakeSh(cmd, cb) {
   shCalls.push(cmd.slice(0, 40));
   let out = '';
   if (cmd.startsWith('sysctl')) out = SYSCTL;
+  /* Order matters: the assertions poll also starts with "pmset". */
+  else if (cmd.startsWith('pmset -g assertions')) out = ASSERTIONS;
   else if (cmd.startsWith('pmset')) out = PMSET;
+  else if (cmd.startsWith('ioreg')) out = IOREG_GPU;
   else if (cmd.startsWith('df')) out = DF;
   else if (cmd.startsWith('vm_stat')) {
     tickNo++;
     const vm = tickNo === 1 ? VM1 : VM2;
     const net = tickNo === 1 ? NET1 : NET2;
-    out = `${vm}\n---PS---\n${PS}\n---NET---\n${net}`;
+    out = `${vm}\n---PS---\n${PS}\n---NET---\n${net}\n---SYS---\n${SYS}`;
   }
   setImmediate(() => cb(out));
 }
@@ -191,8 +211,15 @@ setTimeout(() => {
     t1.mem.cacheMB);
   check('pct consistent with usedMB/totalMB',
     near(t1.mem.pct, t1.mem.usedMB / t1.mem.totalMB * 100, 0.2));
-  check('committedMB is NULL (macOS has no commit charge)', t1.mem.committedMB === null,
-    String(t1.mem.committedMB));
+  /* This suite used to assert committedMB === null "because macOS has no commit charge" - and
+     passed even after the approximation was implemented, because the fixture simply omitted the
+     ---SYS--- section, so the assertion was testing the fixture's silence, not the collector.
+     The honest claim now: used + swap-used, the closest true statement macOS offers, and declared
+     as an approximation in caps.js rather than filed as the Windows number. */
+  check('committedMB = used + swap-used (512 MB in the fixture)',
+    t1.mem.committedMB === t1.mem.usedMB + 512, `${t1.mem.committedMB} vs ${t1.mem.usedMB} + 512`);
+  check('swapUsedMB parsed from vm.swapusage', t1.mem.swapUsedMB === 512, t1.mem.swapUsedMB);
+  check('kernel pressure level surfaced (1 = normal)', t1.mem.pressure === 1, t1.mem.pressure);
 
   console.log('\n--- hard faults: Pageins DIFFERENCED, not reported as a total ---');
   console.log(`  tick1 ${t1.mem.pagesSec}  tick2 ${t2.mem.pagesSec}  (fixture advanced Pageins by 1500 over ~1s)`);
@@ -230,6 +257,20 @@ setTimeout(() => {
     near(t2.net.rxMBs, 5, 1.2), t2.net.rxMBs);
   check('tx rate ~1 MB/s', near(t2.net.txMBs, 1, 0.4), t2.net.txMBs);
 
+  console.log('\n--- per-interface rates (net.ifaces) ---');
+  check('ifaces present on the tick', Array.isArray(t2.net.ifaces));
+  const en0 = (t2.net.ifaces || []).find((i) => i.id === 'en0');
+  check('en0 kept, virtuals (utun0) and loopback excluded',
+    !!en0 && !(t2.net.ifaces || []).some((i) => i.id === 'lo0' || i.id === 'utun0'),
+    JSON.stringify((t2.net.ifaces || []).map((i) => i.id)));
+  if (en0) {
+    check('en0 rx ~5 MB/s (per-NIC, not the sum)', near(en0.rxMBs, 5, 1.2), en0.rxMBs);
+    check('en0 tx ~1 MB/s', near(en0.txMBs, 1, 0.4), en0.txMBs);
+  }
+  const en0t1 = ((t1.net.ifaces) || []).find((i) => i.id === 'en0');
+  check('first tick per-NIC rate NULL, not a since-boot spike',
+    !en0t1 || en0t1.rxMBs === null, en0t1 && String(en0t1.rxMBs));
+
   console.log('\n--- volumes ---');
   for (const v of t2.disk.vols) console.log(`  ${v.id}  ${v.freeGB}/${v.sizeGB} GB`);
   check('root volume parsed', t2.disk.vols.some((v) => v.id === '/'));
@@ -251,6 +292,21 @@ setTimeout(() => {
   check('combinedMBs = sum of both disks (0.72 + 0.31)', near(t2.disk.io.combinedMBs, 1.03, 0.02),
     t2.disk.io.combinedMBs);
 
+  console.log('\n--- per-device disk rows (disk.devices) ---');
+  const devs = t2.disk.devices;
+  check('devices emitted, named from the iostat header', Array.isArray(devs) && devs.length === 2,
+    JSON.stringify(devs && devs.map((d) => d.id)));
+  if (Array.isArray(devs) && devs.length === 2) {
+    check('disk0 keeps ITS column, not the sum', devs[0].id === 'disk0' && near(devs[0].combinedMBs, 0.72, 0.01),
+      `${devs[0].id} ${devs[0].combinedMBs}`);
+    check('disk4 keeps its column', devs[1].id === 'disk4' && near(devs[1].combinedMBs, 0.31, 0.01),
+      `${devs[1].id} ${devs[1].combinedMBs}`);
+    check('per-device tps carried', devs[0].tps === 40 && devs[1].tps === 10,
+      `${devs[0].tps},${devs[1].tps}`);
+    check('per-device read/write/busy NULL (iostat cannot split them)',
+      devs.every((d) => d.readMBs === null && d.writeMBs === null && d.busyPct === null));
+  }
+
   console.log('\n--- battery: amps + volts -> watt-hours, sign from state ---');
   console.log(`  ${JSON.stringify(t2.pwr)}`);
   const p = t2.pwr;
@@ -271,8 +327,25 @@ setTimeout(() => {
     (p.fullWh / p.designWh * 100).toFixed(1) + '%');
   check('lifeMin parsed from "4:12 remaining"', p.lifeMin === 252, p.lifeMin);
 
+  console.log('\n--- gpu: IOAccelerator utilisation, in the shared adapter shape ---');
+  console.log(`  ${JSON.stringify(t2.gpus)}`);
+  check('gpu utilisation surfaced from Device Utilization %', !!t2.gpu && t2.gpu.util === 37,
+    t2.gpu && t2.gpu.util);
+  check('adapter rows use {n, util} - the shape the panel and the linux plug speak',
+    !!t2.gpus && Array.isArray(t2.gpus.ads) && t2.gpus.ads[0] && t2.gpus.ads[0].n === 'gpu0'
+      && t2.gpus.ads[0].util === 37,
+    JSON.stringify(t2.gpus && t2.gpus.ads));
+  check('unmeasured gpu fields NULL, not zeroed (mem, temp, watts)',
+    !!t2.gpu && t2.gpu.memUsed === null && t2.gpu.temp === null && t2.gpu.watts === null);
+
+  console.log('\n--- wake: which process is holding the machine awake ---');
+  console.log(`  ${JSON.stringify(t2.wake)}`);
+  check('sleep blocker parsed with pid, name and kind',
+    Array.isArray(t2.wake) && t2.wake.length === 1 && t2.wake[0].pid === 501
+      && t2.wake[0].name === 'caffeinate' && t2.wake[0].kind === 'PreventUserIdleSystemSleep',
+    JSON.stringify(t2.wake));
+
   console.log('\n--- absent features stay absent (null, never a plausible zero) ---');
-  check('gpu null, not a zeroed object', t2.gpu === null && t2.gpus === null);
   check('proc.pf NULL not 0 (fault counting never implemented here)', t2.proc.every((p) => p.pf === null));
   check('self block NULL, not fabricated zeros', t2.self === null,
     'FOOTPRINT claims to include its own cost; 0.00% there would be a measured-looking lie');

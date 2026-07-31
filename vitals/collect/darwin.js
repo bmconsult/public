@@ -116,15 +116,27 @@ function parseIostatLine(line, diskCount) {
   if (!n.length || n.some((v) => !Number.isFinite(v))) return null;
   const diskCols = diskCount * 3;
   if (n.length < diskCols + 3) return null;
+  /* PER-DEVICE, kept rather than summed away. This loop already visited every disk's column
+     triple and kept only the total - the identical discard the netstat loop was making with
+     per-NIC rows. The caller zips these with the device names it read off the header. */
   let mbs = 0;
-  for (let i = 0; i < diskCount; i++) mbs += n[i * 3 + 2] || 0;
+  const disks = [];
+  for (let i = 0; i < diskCount; i++) {
+    const mb = n[i * 3 + 2] || 0;
+    mbs += mb;
+    disks.push({ tps: n[i * 3 + 1] || 0, mbs: mb });
+  }
   const us = n[diskCols], sy = n[diskCols + 1], id = n[diskCols + 2];
-  return { us, sy, id, busy: Math.max(0, Math.min(100, 100 - id)), mbs };
+  return { us, sy, id, busy: Math.max(0, Math.min(100, 100 - id)), mbs, disks };
 }
 
 function start(root, { onStatic, onTick, onError }) {
   let stopped = false, timer = null, tick = 0;
   let cpuNow = null, diskMBs = 0, diskCount = 1;
+  /* Device names come from iostat's own header row; the data rows carry only columns. Kept in
+     header order so index i of a parsed line is devNames[i]. Null until the first data line so
+     the tick can say "not measured yet" instead of showing an empty machine. */
+  let devNames = ['disk0'], devCache = null;
   /* NULL until pmset actually answers. `{bat:false}` as an initial value tells a MacBook owner
      their laptop has no battery for the first second or two of every launch. */
   let prevNet = null, prevPageins = null, prevProc = null, prevPwr = null;
@@ -168,12 +180,23 @@ function start(root, { onStatic, onTick, onError }) {
         /* The device header names every disk; count them so the column maths stays right on a Mac
            with an external drive attached. */
         if (/disk\d/.test(line) && !/\d\.\d/.test(line)) {
-          diskCount = (line.match(/disk\d+/g) || ['disk0']).length;
+          devNames = line.match(/disk\d+/g) || ['disk0'];
+          diskCount = devNames.length;
           continue;
         }
         if (/[A-Za-z]/.test(line)) continue;          // any other header row
         const r = parseIostatLine(line, diskCount);
-        if (r) { cpuNow = r; diskMBs = r.mbs; }
+        if (r) {
+          cpuNow = r; diskMBs = r.mbs;
+          /* Unified per-device shape across the three plugs: id + the four io fields, nulls where
+             this host cannot split them. iostat has no read/write split and no busy time. */
+          devCache = r.disks.map((d, i) => ({
+            id: devNames[i] || `disk${i}`,
+            readMBs: null, writeMBs: null,
+            combinedMBs: Math.round(d.mbs * 100) / 100,
+            tps: d.tps, busyPct: null,
+          }));
+        }
       }
     });
     ios.on('error', () => onError('[metrics/darwin] iostat unavailable'));
@@ -276,7 +299,11 @@ function start(root, { onStatic, onTick, onError }) {
       if (stopped) return;
       const utils = [...String(out || '').matchAll(/"Device Utilization %"\s*=\s*(\d+)/g)].map((m) => +m[1]);
       if (!utils.length) { gpuCache = null; return; }
-      const ads = utils.map((u, i) => ({ id: 'gpu' + i, name: null, util: u }));
+      /* `n`, not `name`: the adapter list contract is {n, util} - it is what collect/linux.js emits
+         and what the panel reads (gpus.ads[].n, see the GPU card). The first cut of this emitted
+         {id, name: null, util}, which the page would have rendered as "undefined 37%" - a shape
+         invented in one file is a field dropped on the floor in the next. */
+      const ads = utils.map((u, i) => ({ n: 'gpu' + i, util: u }));
       gpuCache = { ads, top: ads.reduce((a, b) => (b.util > a.util ? b : a)), max: Math.max(...utils) };
     });
   }
@@ -455,6 +482,9 @@ function start(root, { onStatic, onTick, onError }) {
                not exposed at all without ioreg spelunking. Nulls, not zeros. */
             io: { readMBs: null, writeMBs: null, combinedMBs: Math.round(diskMBs * 100) / 100,
                   busyPct: null, queue: null },
+            /* Per-device throughput, zipped from the iostat header names and the column triples.
+               Null until the stream's first data line - same three-state rule as everything else. */
+            devices: devCache,
           },
           /* First tick has nothing to difference against, so the honest answer is null - not 0,
              which would read as a genuinely idle network. The Linux plug suppresses its whole

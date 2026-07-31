@@ -60,7 +60,9 @@ jobs:
       # against reality instead of against another assumption.
       - name: Capture real fixtures
         if: always()
-        run: bash tools/capture-macos-fixtures.sh
+        # NETQ=1: the networkQuality section costs bandwidth, which is fine on a runner and is the
+        # fixture the future speed-test integration will be written against.
+        run: NETQ=1 bash tools/capture-macos-fixtures.sh
 
       - name: Upload fixtures
         if: always()
@@ -88,6 +90,35 @@ jobs:
       - name: Route guard + capability manifest
         if: always()
         run: node test-routes.js
+
+      # The non-Windows action layer: validation, denial counting, osascript command construction,
+      # and the growth walker against a real temporary tree - here that tree is on real Darwin.
+      - name: Action layer + growth walker suite
+        if: always()
+        run: node test-actions-posix.js
+
+      # The walker against a real macOS home directory: proves it survives genuine permission
+      # walls, firmlinks and .app bundles, and that the snapshot it writes is one History.growth
+      # can read. This is the live half of what the suite above simulates.
+      - name: Growth walker walks a real Darwin home
+        if: always()
+        run: |
+          node growthscan.js --root "$HOME" --out /tmp/walk-live.json --min 1
+          node -e '
+            const s = require("/tmp/walk-live.json");
+            let bad = 0;
+            const need = { scanner: s.scanner === "walk-1", "sep is /": s.sep === "/",
+                           "walked something": s.dirs > 0 && s.files > 0,
+                           "total > 0": s.totalBytes > 0,
+                           "entries present": Array.isArray(s.entries) && s.entries.length > 0,
+                           "denied is a count, not a lie": Number.isInteger(s.denied) };
+            for (const [k, v] of Object.entries(need)) {
+              console.log((v ? "  ok   " : "  MISS ") + k);
+              if (!v) bad++;
+            }
+            console.log(`  ${s.dirs} dirs, ${s.files} files, ${(s.totalBytes/2**30).toFixed(2)} GB, ${s.denied} denied`);
+            process.exit(bad ? 1 : 0);
+          '
 
       # Proves the bridge actually starts and serves measured telemetry on macOS, which no unit
       # test covers: process spawn, the collector's own child processes, and the HTTP surface.

@@ -364,13 +364,29 @@ function start(root, { onStatic, onTick, onError }) {
       const perCore = c.cores.map((core, i) => Math.round(pctOf(core, prevCpu.cores[i])));
 
       let rdB = 0, wrB = 0, busyMs = 0, queue = 0;
+      /* PER-DEVICE, kept rather than summed away. This loop already differenced every whole disk
+         to build the aggregate and then discarded the rows - caps.js has been calling that
+         "collected-but-unreachable" since it was written. Same {id, readMBs, writeMBs, ...} shape
+         the darwin plug emits, with the split and busy time real here because the kernel gives
+         them per device. */
+      const devices = [];
       for (const [name, cur] of Object.entries(d)) {
         const p = prevDisk[name];
         if (!p) continue;
-        rdB += Math.max(0, cur.rd - p.rd) * SECTOR;
-        wrB += Math.max(0, cur.wr - p.wr) * SECTOR;
-        busyMs = Math.max(busyMs, Math.max(0, cur.busyMs - p.busyMs));
+        const dRd = Math.max(0, cur.rd - p.rd) * SECTOR;
+        const dWr = Math.max(0, cur.wr - p.wr) * SECTOR;
+        const dBusy = Math.max(0, cur.busyMs - p.busyMs);
+        rdB += dRd;
+        wrB += dWr;
+        busyMs = Math.max(busyMs, dBusy);
         queue += cur.inflight;
+        devices.push({
+          id: name,
+          readMBs: Math.round((dRd / 1048576) / elapsed * 100) / 100,
+          writeMBs: Math.round((dWr / 1048576) / elapsed * 100) / 100,
+          combinedMBs: Math.round(((dRd + dWr) / 1048576) / elapsed * 100) / 100,
+          busyPct: Math.min(100, Math.round((dBusy / (elapsed * 1000)) * 100)),
+        });
       }
 
       if (!volCache || tick % 10 === 1) volCache = volumes();
@@ -424,10 +440,22 @@ function start(root, { onStatic, onTick, onError }) {
             busyPct: Math.min(100, Math.round((busyMs / (elapsed * 1000)) * 100)),
             queue,
           },
+          devices,
         },
         net: {
           rxMBs: Math.round(Math.max(0, n.rx - prevNet.rx) / 1048576 / elapsed * 1000) / 1000,
           txMBs: Math.round(Math.max(0, n.tx - prevNet.tx) / 1048576 / elapsed * 1000) / 1000,
+          /* Per-interface rates, differenced against the previous tick's per-NIC totals - which
+             netdev() has always collected and this tick always threw away. A NIC with no previous
+             sample (VPN up, cable in) reports null, not a spike off a zero baseline. */
+          ifaces: n.per.map((nic) => {
+            const p = prevNet.per.find((x) => x.n === nic.n);
+            return {
+              id: nic.n,
+              rxMBs: p ? Math.round(Math.max(0, nic.rx - p.rx) / 1048576 / elapsed * 100) / 100 : null,
+              txMBs: p ? Math.round(Math.max(0, nic.tx - p.tx) / 1048576 / elapsed * 100) / 100 : null,
+            };
+          }),
         },
         proc: procOut.slice(0, 16),
         gpu: g && g.max != null ? { util: g.max } : null,

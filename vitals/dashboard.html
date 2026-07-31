@@ -2308,6 +2308,7 @@ RENDER.mem=()=>{
         <div class="bar mb" style="height:7px;margin:2px 0 8px"><i id="cmB" style="background:var(--mem)"></i></div>
         <div class="kv"><span>Installed</span><b id="inV">—</b></div>
         <div class="bar mb" style="height:7px;margin-top:2px"><i id="inB" style="background:rgba(var(--fg),.22)"></i></div>
+        <div class="kv" id="pressRow" style="display:none;margin-top:6px"><span>Kernel pressure</span><b id="pressV">—</b></div>
         <div class="note">Commit exceeding installed RAM is normal — it counts reserved address space, much of which is never touched. <b>Cached memory is not wasted memory:</b> Windows fills unused RAM with a file cache and releases it instantly on demand; "free RAM" near zero on a healthy machine is correct behaviour, not a leak.</div>
       </div>
       <div class="card"><h3 style="display:flex;align-items:center">Top processes by memory<span style="flex:1"></span>
@@ -2340,6 +2341,15 @@ RENDER.mem=()=>{
   $('#cmB').style.width=hasCommit?(num(t.mem.committedMB)/mxc*100)+'%':'0%';
   $('#cmB').style.opacity=hasCommit?'':'.25';
   $('#inB').style.width=(num(t.mem.totalMB)/mxc*100)+'%';
+  /* The kernel's own memory VERDICT (macOS pressure level: 1 normal / 2 warning / 4 critical) -
+     a better answer to "do I need more RAM" than any percentage. Capability-gated AND null-gated:
+     the row exists only where the platform is verified to measure it, and never invents a value. */
+  {const pr=t.mem.pressure, prRow=$('#pressRow');
+   const show=can('mem.pressure')&&pr!=null;
+   if(prRow){ prRow.style.display=show?'':'none';
+     if(show){ const v=$('#pressV');
+       v.textContent=pr===1?'normal':pr===2?'warning':pr===4?'critical':String(pr);
+       v.style.color=pr===4?'var(--crit)':pr===2?'var(--warn)':'var(--ok)'; } }}
   // 12 rows fits 1240x820 with margin; 14 clipped the last row. The rest of the ~380 processes
   // live behind "Show all" — an on-demand snapshot, never on the 1 Hz tick (the stream carries
   // only the top 16 by design; see /api/processes in bridge.js).
@@ -2454,6 +2464,7 @@ RENDER.net=()=>{
         <div class="chart" style="height:56px"><span class="cap">last hour</span><canvas id="txChart"></canvas></div>
       </div>
     </div>
+    <div class="card" id="ifCard" style="display:none;margin-bottom:9px"><h3>Per interface</h3><div id="ifBody"></div></div>
     <div class="g2" style="grid-template-columns:1.12fr 1fr 1fr">
       <div class="card"><h3>Link &amp; path <span class="muted">· local reads</span>
           <button class="btn" id="niRefresh" style="float:right;font-size:9.5px;padding:2px 8px;margin-top:-2px">re-read</button></h3>
@@ -2494,6 +2505,14 @@ RENDER.net=()=>{
   }
   $('#netRx').textContent=fmt(t.net.rxMBs,2);
   $('#netTx').textContent=fmt(t.net.txMBs,2);
+  /* Per-NIC rates (tick.net.ifaces, darwin + linux plugs). Capability-gated so the card only
+     exists where the platform is verified to measure it, and null rates (a NIC's first sample has
+     nothing to difference against) render as the no-value dash rather than 0.00. */
+  {const ifs=t.net.ifaces, ifc=$('#ifCard');
+   const show=can('net.perInterface')&&Array.isArray(ifs)&&ifs.length>0;
+   if(ifc){ ifc.style.display=show?'':'none';
+     if(show) $('#ifBody').innerHTML=ifs.slice(0,6).map(i=>
+       `<div class="kv"><span>${sysEsc(i.id)}</span><b>↓ ${fmt(i.rxMBs,2)} · ↑ ${fmt(i.txMBs,2)} MB/s</b></div>`).join(''); }}
   areaChart($('#rxChart'),S.hist.rx,cssv('--cv-net'));
   areaChart($('#txChart'),S.hist.tx,cssv('--cv-net'));
   $('#ioR').textContent=fmt(t.disk.io.readMBs,2);
@@ -3263,6 +3282,11 @@ function paintToolTiles(){
       ps.innerHTML=`${t.pwr.ac?'on AC':'on battery'}${t.pwr.charging?' · charging':(t.pwr.rateW?` · ${fmt(t.pwr.rateW,1)} W`:' · no flow')}`
         +(health!==null?`<br>holds ${health}% of design · ${t.pwr.cycles||0} cycles`:'');
     } else { p.textContent='—'; ps.textContent='no battery reported'; }
+    /* Which process is holding the machine awake (tick.wake, pmset assertions on macOS). Only where
+       the platform is verified to answer it; an empty array is the real "nothing is" and says so. */
+    if(ps&&can('power.wake')&&Array.isArray(t.wake)){
+      ps.innerHTML+=`<br>${t.wake.length?('awake: '+t.wake.slice(0,2).map(w=>sysEsc(w.name)).join(', ')):'nothing blocks sleep'}`;
+    }
   }
   const n=$('#twNet'), ns=$('#twNetSub');
   if(n){ const dn=t.net.rxMBs||0, up=t.net.txMBs||0;

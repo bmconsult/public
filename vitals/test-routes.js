@@ -87,7 +87,9 @@ function reachesPS(body) {
 const GUARDED_BY_DEPENDENCY = {
   '/api/mft': 'reads MFT snapshots that only mftscan.ps1 creates',
   '/api/scanlog': 'reads the log mftscan.ps1 writes',
-  '/api/growth': 'diffs MFT snapshots; without them it reports "nothing grew" forever',
+  /* '/api/growth' left this list 2026-07-31: growthscan.js now produces snapshots on any platform,
+     and the route already answers an honest {need:2, have:N} when none exist - so its dependency
+     argument is gone and gating it would 501 a working cross-platform feature. */
 };
 
 console.log(`router: ${bodies.size} routes | guard list: ${guarded.size} | PS-reaching helpers: ${psFns.size}\n`);
@@ -123,7 +125,26 @@ const overGated = [...guarded].filter((g) =>
 check('no pure-Node route is falsely gated', overGated.length === 0,
   overGated.length ? overGated.join(', ') + ' — these work everywhere and must not 501' : 'none');
 
+/* ---- the ported exceptions (2026-07-31) ----
+   PORTED_ROUTES lets a guarded route through on a platform where actions-posix.js implements it.
+   Two invariants keep that honest: every ported route must still BE in the guard list (the gate
+   expression only consults PORTED for routes the guard would otherwise refuse - an entry outside
+   the list is dead configuration), and must exist in the router. */
+const portedBlock = /const PORTED_ROUTES = \{([\s\S]*?)\n\};/.exec(src);
+check('PORTED_ROUTES declared', !!portedBlock);
+const ported = portedBlock
+  ? (portedBlock[1].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+      .match(/'(\/api\/[^']+)'/g) || []).map((s) => s.slice(1, -1))
+  : [];
+check('every ported route is in the guard list (else the exception is dead)',
+  ported.every((r) => guarded.has(r)), ported.filter((r) => !guarded.has(r)).join(', ') || 'all listed');
+check('every ported route exists in the router',
+  ported.every((r) => bodies.has(r)), ported.filter((r) => !bodies.has(r)).join(', ') || 'all exist');
+check('the platform gate consults PORTED_HERE', /WINDOWS_ONLY_ROUTES\.has\(p\) && !PORTED_HERE\.has\(p\)/.test(src));
+
 /* named regressions, so they cannot quietly return */
+check('/api/growth NOT guarded (pure Node; honest empty state; walker feeds it everywhere)', !guarded.has('/api/growth'));
+check('/api/growthscan NOT guarded (pure Node walker)', !guarded.has('/api/growthscan'));
 check('/api/speedtest NOT guarded (pure Node https)', !guarded.has('/api/speedtest'));
 check('/api/nettest IS guarded (genuinely PowerShell)', guarded.has('/api/nettest'));
 check('/api/openrecycle guarded (the real route name)', guarded.has('/api/openrecycle'));

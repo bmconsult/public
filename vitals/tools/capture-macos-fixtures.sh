@@ -9,7 +9,7 @@
 #   bash capture-macos-fixtures.sh --redact   -> same, with hardware IDs masked
 #
 # WHY THIS MATTERS. collect/darwin.js was written from documented tool output on a machine with no
-# Mac. Its LOGIC is tested (collect/test-darwin-sim.js drives the whole collector and checks 61
+# Mac. Its LOGIC is tested (collect/test-darwin-sim.js drives the whole collector and checks 81
 # things), but the thing that cannot be tested without you is whether these commands really emit
 # what we assumed. Every number the panel shows on macOS rests on that assumption.
 #
@@ -142,6 +142,27 @@ else echo "(no LaunchDaemons readable)" >> "$OUT"; fi
 # Spotlight: the MFT-killer. If indexing is on, "largest files" and "what changed" are index reads.
 emit "mdutil -s / (is Spotlight indexing on?)"
 mdutil -s / 2>&1                                                                >> "$OUT" 2>&1
+
+# One real query, so the mdfind-backed "largest files" idea gets written against actual behaviour -
+# including the (common) case where the index is off and it answers nothing.
+emit "mdfind sample (files > 100 MB under HOME, count + first 5)"
+mdfind -onlyin "$HOME" -count 'kMDItemFSSize > 104857600' 2>&1                  >> "$OUT" 2>&1
+mdfind -onlyin "$HOME" 'kMDItemFSSize > 104857600' 2>/dev/null | head -5 \
+  | sed "s|$HOME|~|g"                                                            >> "$OUT" 2>&1 || true
+
+# networkQuality is the only capture here that SPENDS something: it runs Apple's bandwidth test,
+# ~10-30 s and real data. Off by default so the promise at the top of this file ("reads, changes
+# nothing") stays true for a casual run; CI and anyone willing passes NETQ=1. Both the human
+# summary and -c (the machine-readable JSON a parser would actually read) are captured, because
+# they are different formats and guessing either is how this collector got its previous mistakes.
+emit "networkQuality (NETQ=1 to enable; costs bandwidth)"
+if [ "${NETQ:-0}" = "1" ]; then
+  networkQuality -s 2>&1                                                         >> "$OUT" 2>&1
+  emit "networkQuality -c (JSON)"
+  networkQuality -s -c 2>&1                                                      >> "$OUT" 2>&1
+else
+  echo "(skipped - set NETQ=1 to run Apple's bandwidth test; it spends real data)" >> "$OUT"
+fi
 
 echo ""
 echo "Captured to: $OUT"

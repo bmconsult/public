@@ -31,12 +31,12 @@
    so a new page cannot silently ship a Windows-only assumption. */
 const KEYS = [
   'cpu.perCore', 'cpu.temps',
-  'mem.hardFaults', 'mem.committed', 'mem.cache',
+  'mem.hardFaults', 'mem.committed', 'mem.cache', 'mem.pressure',
   'disk.perVolume', 'disk.io', 'disk.perDevice',
   'net.rates', 'net.perInterface', 'net.sockets',
   'proc.list', 'proc.cpu', 'proc.mem', 'proc.io', 'proc.faults',
   'gpu.total', 'gpu.perAdapter', 'gpu.perProcess',
-  'power.battery', 'power.rate', 'power.health',
+  'power.battery', 'power.rate', 'power.health', 'power.wake',
   'scan.mft', 'scan.iotrace', 'scan.growth', 'scan.startup',
   'clip.history',
   'act.restartApp', 'act.clean', 'act.kill', 'act.elevate',
@@ -54,12 +54,12 @@ const PLATFORMS = {
     verified: 'measured on Windows 11 26H1, i7-1165G7, hybrid Iris Xe + GTX 1650',
     caps: {
       'cpu.perCore': true, 'cpu.temps': 'partial',
-      'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
+      'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true, 'mem.pressure': false,
       'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': true,
       'net.rates': true, 'net.perInterface': true, 'net.sockets': true,
       'proc.list': true, 'proc.cpu': true, 'proc.mem': true, 'proc.io': true, 'proc.faults': true,
       'gpu.total': true, 'gpu.perAdapter': true, 'gpu.perProcess': true,
-      'power.battery': true, 'power.rate': true, 'power.health': true,
+      'power.battery': true, 'power.rate': true, 'power.health': true, 'power.wake': false,
       'scan.mft': true, 'scan.iotrace': true, 'scan.growth': true, 'scan.startup': true,
       'clip.history': true,
       'act.restartApp': true, 'act.clean': true, 'act.kill': true, 'act.elevate': true,
@@ -68,6 +68,10 @@ const PLATFORMS = {
     notes: {
       'cpu.temps': 'Windows exposes no CPU temperature to unprivileged code. Present only when ' +
                    'LibreHardwareMonitor is running and serving its web endpoint on :8085.',
+      'mem.pressure': 'A kernel memory VERDICT (the macOS pressure level) has no Windows twin; ' +
+                      'the hard-fault rate is this platform\'s honest equivalent and is measured.',
+      'power.wake': 'Naming the process that blocks sleep needs an elevated `powercfg /requests`, ' +
+                    'which the unelevated bridge deliberately does not run.',
     },
   },
 
@@ -98,19 +102,25 @@ const PLATFORMS = {
          (LibreHardwareMonitor). Measured-and-discarded is not a capability. */
       'cpu.perCore': true, 'cpu.temps': false,
       'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
-      /* perDevice is differenced inside the plug to build the aggregate, but no per-device rows
-         reach the tick, so nothing can consume it. */
+      /* /proc/pressure (PSI) exists on modern kernels, but no parser for it has been written. */
+      'mem.pressure': false,
+      /* per-device rows and per-interface rates are EMITTED in the tick as of 2026-07-31
+         (disk.devices, net.ifaces) - they were previously differenced inside the plug and
+         discarded. Still false: the emission has not been re-run on a Linux host, and a flag here
+         means verified, not written. Flip after the live suite sees them populated. */
       'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': false,
-      /* perInterface and perDevice are COLLECTED in the plug but not yet emitted in the tick, and the
-         routes that would serve them are PowerShell. Collected-but-unreachable is not a capability. */
       'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
       'proc.list': true, 'proc.cpu': true, 'proc.mem': true, 'proc.io': 'partial', 'proc.faults': true,
       'gpu.total': 'partial', 'gpu.perAdapter': 'partial', 'gpu.perProcess': false,
       'power.battery': 'partial', 'power.rate': 'partial', 'power.health': 'partial',
-      /* ---- EVERYTHING BELOW IS FALSE BECAUSE THE CODE IS POWERSHELL, not because Linux cannot do
-         it. Linux can do all of it, and several would be easy. But a manifest describes what is
-         IMPLEMENTED, not what is possible - the previous values here were written from intent and
-         certified features that return 501 on this platform. Port the route, then flip the flag. ---- */
+      'power.wake': false,
+      /* ---- MOSTLY FALSE BECAUSE THE CODE IS POWERSHELL, not because Linux cannot do it. A
+         manifest describes what is IMPLEMENTED AND VERIFIED - the original values here were
+         written from intent and certified features that returned 501.
+         Three of these now have native implementations that the router serves on this platform:
+         scan.growth (growthscan.js walker), act.kill and act.clean (actions-posix.js). They stay
+         false until they have actually run on a Linux host - route reachable, capability
+         unclaimed. The rest remain unported. ---- */
       'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
       'clip.history': false,
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
@@ -132,11 +142,22 @@ const PLATFORMS = {
       'gpu.total': 'amdgpu and i915 publish utilisation through /sys; NVIDIA requires nvidia-smi. ' +
                    'Whichever is absent is omitted rather than reported as zero.',
       'gpu.perProcess': 'No vendor-neutral equivalent to the Windows GPU Engine counters exists.',
-      'scan.mft': 'Master File Table parsing is an NTFS feature. The growth scan replaces it here ' +
-                  'and walks the tree directly, which is slower but works on any filesystem.',
+      'mem.pressure': '/proc/pressure/memory (PSI) is the kernel\'s own verdict and the right ' +
+                      'source; the parser has not been written yet.',
+      'scan.mft': 'Master File Table parsing is an NTFS feature. The growth walker ' +
+                  '(growthscan.js, POST /api/growthscan) replaces it here - slower, but it works ' +
+                  'on any filesystem.',
+      'scan.growth': 'Implemented: growthscan.js walks the tree and /api/growth diffs the ' +
+                     'snapshots. Not yet run on a Linux host, so unclaimed until it is.',
+      'act.kill': 'Implemented (SIGTERM, then SIGKILL for survivors, denials counted). Unverified ' +
+                  'on a Linux host.',
+      'act.clean': 'Implemented for user-owned targets (tmp, ~/.cache) with denials counted. No ' +
+                   'elevated targets: that needs polkit, see act.elevate.',
       'scan.iotrace': 'Needs blktrace or eBPF, both of which require root and a kernel built for it.',
       'clip.history': 'Requires a running X11 or Wayland session with xclip or wl-clipboard present.',
-      'act.elevate': 'pkexec when a polkit agent is running, otherwise sudo in a terminal.',
+      'act.elevate': 'pkexec when a polkit agent is running, otherwise sudo in a terminal. Not ' +
+                     'implemented: whether an agent is present decides everything, and that ' +
+                     'cannot be written honestly from documentation.',
       'host.frameless': 'No WebView2 equivalent. The panel opens in the default browser in app mode; ' +
                         'edge-docking and always-on-top are the window manager\'s business, not ours.',
     },
@@ -156,7 +177,7 @@ const PLATFORMS = {
     /* Still false, and it stays false until someone runs it on a Mac. What HAS been done is worth
        stating precisely, because it is not nothing and it is also not verification:
        collect/test-darwin-sim.js drives the entire collector from fixture text through an injection
-       seam and checks 64 things - the memory arithmetic, ps aggregation, netstat de-duplication,
+       seam and checks 81 things - the memory arithmetic, ps aggregation, netstat de-duplication,
        mAh-to-watt-hour conversion with sign, rate differencing across ticks, null discipline, and
        the tick contract. That suite found three real defects: installed RAM was read from two
        different sources that could disagree, and the df parser located the mount point with
@@ -165,7 +186,7 @@ const PLATFORMS = {
        So: the logic is tested, the format assumption is not. Only a Mac settles the latter. */
     verified: false,
     verifyNote: 'UNVERIFIED on hardware - written from documented tool output, never executed on a ' +
-                'Mac. The collector LOGIC is covered by 64 simulation checks (collect/test-darwin-sim.js), ' +
+                'Mac. The collector LOGIC is covered by 81 simulation checks (collect/test-darwin-sim.js), ' +
                 'but whether macOS really emits the assumed formats is untested. CI now runs the live ' +
                 'suite on real Darwin (macos-14 + macos-15) on every push; this note and the flags ' +
                 'below change when it goes green, and not before.',
@@ -176,45 +197,79 @@ const PLATFORMS = {
        source, which is the same standard every other true in this file was held to. Writing the
        code and flipping the flag are deliberately two separate acts. */
     caps: {
-      /* Corrected 2026-07-30 to match the CODE rather than the intent. Each false below was
-         previously true or partial while the implementation emitted nothing, emitted null, or did
-         not exist at all. The note beside each says which. */
+      /* Corrected 2026-07-30 to match the CODE rather than the intent, and again 2026-07-31 the
+         OTHER way: much below is now IMPLEMENTED (per-core, committed approximation, pressure,
+         per-NIC, per-device, GPU via IOAccelerator, wake assertions, the growth walker, the whole
+         action layer) and every flag for it is still false, because a flag here means "verified on
+         this platform" and none of it has executed on a Mac. The note beside each says which state
+         it is in. The CI live suite flipping green is what changes these, one by one. */
       'cpu.perCore': false, 'cpu.temps': false,
-      'mem.hardFaults': true, 'mem.committed': false, 'mem.cache': true,
+      'mem.hardFaults': true, 'mem.committed': false, 'mem.cache': true, 'mem.pressure': false,
       'disk.perVolume': true, 'disk.io': 'partial', 'disk.perDevice': false,
       'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
       'proc.list': true, 'proc.cpu': 'partial', 'proc.mem': true, 'proc.io': false, 'proc.faults': false,
       'gpu.total': false, 'gpu.perAdapter': false, 'gpu.perProcess': false,
-      'power.battery': true, 'power.rate': true, 'power.health': true,
-      /* PowerShell one-shots, same as Linux. Not a macOS limitation - an unported layer. */
+      'power.battery': true, 'power.rate': true, 'power.health': true, 'power.wake': false,
       'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
       'clip.history': false,
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
     },
     notes: {
-      'cpu.perCore': 'The plug emits an EMPTY cores array - the `iostat -c` per-core reading this ' +
-                     'note once promised was never implemented. Declared false so the per-thread ' +
-                     'wheel is hidden rather than pinned at "0% hottest" forever.',
+      'cpu.perCore': 'Implemented: os.cpus() carries per-core tick counters on Darwin, differenced ' +
+                     'between ticks like /proc/stat on Linux. Unverified on hardware - flips when ' +
+                     'CI shows per-core values agreeing with an independent source. (An earlier ' +
+                     'note here claimed per-core was impossible without a native addon, which was ' +
+                     'never true.)',
       'cpu.total': 'Comes from the iostat stream. If iostat is missing or has not yet emitted a ' +
                    'data line, total is null rather than 0 - an idle-looking CPU is the one lie ' +
                    'this tool must never tell.',
-      'mem.committed': 'Not implemented. macOS has no direct commit-charge equivalent and the ' +
-                       'anonymous-plus-swap approximation was never written, so the field is null.',
+      'mem.committed': 'Approximated as resident-used plus swap-used (vm.swapusage): "how much ' +
+                       'memory this machine has actually had to find". macOS has no true commit ' +
+                       'charge, so this is deliberately NOT presented as the Windows number. ' +
+                       'Unverified on hardware.',
+      'mem.pressure': 'Implemented: kern.memorystatus_vm_pressure_level, the number behind ' +
+                      'Activity Monitor\'s pressure graph (1 normal / 2 warning / 4 critical). ' +
+                      'Unverified on hardware.',
       'proc.cpu': 'macOS `ps` reports %cpu relative to ONE core, so a saturated multi-threaded ' +
                   'process can exceed 100. Normalised by core count to match the Windows and Linux ' +
                   'scale, but this is unverified on hardware.',
-      'proc.faults': 'Not implemented - the plug emits 0 for every process, so the column is ' +
-                     'suppressed rather than shown as a machine where nothing ever faults.',
+      'proc.faults': 'Not implemented - needs `top -stats faults`, whose column layout is being ' +
+                     'captured by CI before the parser is written. Null, never 0.',
       'disk.io': 'iostat gives COMBINED throughput only. Read/write split, busy percentage and ' +
-                 'queue depth are all null; only combinedMBs is real.',
+                 'queue depth are all null; only combinedMBs is real. The split lives one level ' +
+                 'up in IOBlockStorageDriver statistics, whose real shape CI is capturing.',
+      'disk.perDevice': 'Implemented: per-disk MB/s and tps from the iostat columns, named from ' +
+                        'its header row. Unverified on hardware.',
+      'net.perInterface': 'Implemented: per-NIC rates differenced from netstat -ib. Unverified on ' +
+                          'hardware.',
       'cpu.temps': 'Apple Silicon exposes thermals only through IOKit and powermetrics, and ' +
                    'powermetrics requires root. Omitted rather than faked.',
       'proc.io': 'Per-process disk I/O needs fs_usage, which requires root and disabling SIP on ' +
                  'some releases. Not worth the cost.',
-      'gpu.total': 'Requires powermetrics (root) or a Metal counter addon. Omitted.',
-      'act.clean': 'Caches under ~/Library/Caches are safe to sweep. System caches are protected by ' +
-                   'SIP and are deliberately left alone.',
+      'gpu.total': 'Implemented WITHOUT root: IOAccelerator\'s "Device Utilization %", the source ' +
+                   'behind Activity Monitor\'s GPU history. The key names are the exact kind of ' +
+                   'documented-not-observed assumption that has been wrong here before, so this ' +
+                   'stays false until CI\'s captured ioreg output agrees.',
+      'power.wake': 'Implemented: pmset -g assertions names the process holding the machine ' +
+                    'awake, by pid, with no admin rights - something the Windows build cannot do ' +
+                    'unelevated. Unverified on hardware.',
+      'scan.growth': 'Implemented: the portable walker (growthscan.js, POST /api/growthscan) ' +
+                     'writes snapshots that /api/growth diffs. Covers what this user may read, ' +
+                     'not the whole disk. Unverified on hardware.',
+      'act.kill': 'Implemented: SIGTERM, then SIGKILL for survivors, permission denials counted ' +
+                  'and reported. Unverified on hardware.',
+      'act.clean': 'Implemented: user targets (TMPDIR, ~/Library/Caches, ~/Library/Logs) swept ' +
+                   'unelevated with denials counted; system targets go through clean-admin.js ' +
+                   'behind the administrator prompt. /System is SIP-protected and deliberately ' +
+                   'untouched. Unverified on hardware.',
+      'act.restartApp': 'Implemented: resolve the bundle first (refuse if LaunchServices cannot), ' +
+                        'AppleScript quit, force only survivors, relaunch the resolved path. ' +
+                        'Unverified on hardware.',
+      'act.elevate': 'Implemented as `do shell script ... with administrator privileges` - macOS ' +
+                     'raises the password dialog, the user can refuse, and the elevated process ' +
+                     'only ever runs clean-admin.js with a key from its own fixed table. ' +
+                     'Unverified on hardware.',
       'host.frameless': 'Opens in the default browser in app mode. A native WKWebView host is ' +
                         'possible but is a separate build with its own signing requirements.',
     },

@@ -50,19 +50,34 @@ class History {
   /* ---------- ingest ---------- */
 
   add(tick) {
-    const c = tick.disk.vols.find((v) => v.id === 'C:') || { pct: 0, freeGB: 0 };
+    /* vols is NULL on the darwin plug until its first df poll answers, and the system volume is
+       'C:' only on Windows - as written this line crashed every early macOS tick (caught upstream,
+       so history silently recorded nothing) and then fell back to {pct:0, freeGB:0}, logging a
+       full-disk-of-zero for any platform without a C:. Root volume first, then the biggest thing
+       present, then honest nulls. */
+    const vols = tick.disk.vols || [];
+    const c = vols.find((v) => v.id === 'C:' || v.id === '/') || vols[0] || { pct: null, freeGB: null };
+    const io = tick.disk.io;
     const s = {
       ts: tick.ts,
       cpu: tick.cpu.total,
       cpuMax: Math.max(0, ...(tick.cpu.cores || [0])),
       mem: tick.mem.pct,
       hardFaults: tick.mem.pagesSec,
+      /* Apple's kernel memory verdict (1 normal / 2 warning / 4 critical); null everywhere it is
+         not measured. flush() drops null fields, so Windows rollups do not grow a dead column. */
+      pressure: tick.mem.pressure != null ? tick.mem.pressure : null,
       diskPct: c.pct,
       diskFreeGB: c.freeGB,
-      diskBusy: tick.disk.io.busyPct,
-      diskQueue: tick.disk.io.queue,
-      diskRW: tick.disk.io.readMBs + tick.disk.io.writeMBs,
-      net: tick.net.rxMBs + tick.net.txMBs,
+      diskBusy: io.busyPct,
+      diskQueue: io.queue,
+      /* null + null is 0 in JavaScript, so the old sums recorded "perfectly idle" for platforms
+         that report null - the plausible zero, archived. Sum only what was measured. */
+      diskRW: (io.readMBs != null || io.writeMBs != null)
+        ? (io.readMBs || 0) + (io.writeMBs || 0)
+        : (io.combinedMBs != null ? io.combinedMBs : null),
+      net: (tick.net.rxMBs != null || tick.net.txMBs != null)
+        ? (tick.net.rxMBs || 0) + (tick.net.txMBs || 0) : null,
       // busiest adapter across BOTH GPUs (GPU Engine counters), not just the NVIDIA:
       // nvidia-smi reads 0% while the Intel iGPU composites the desktop — the old field
       // recorded that lie for history too. Fallback keeps old ticks readable.
@@ -166,8 +181,12 @@ class History {
 
   snapshots() {
     try {
+      /* Two snapshot families: mft-* from the NTFS scanner, walk-* from the portable tree walker
+         (growthscan.js). Same entries shape, so everything downstream reads both; growth() refuses
+         to diff ACROSS families via the scanner-version guard below, because an MFT index and a
+         permission-limited walk measure different things. */
       return fs.readdirSync(this.dir)
-        .filter((f) => /^mft-.*\.json$/.test(f))
+        .filter((f) => /^(?:mft|walk)-.*\.json$/.test(f))
         .map((f) => {
           const st = fs.statSync(path.join(this.dir, f));
           return { file: f, mtime: st.mtimeMs, sizeMB: +(st.size / 1048576).toFixed(2) };
@@ -205,10 +224,15 @@ class History {
 
     // Keep only the DEEPEST attribution: if a child accounts for ~all of a parent's growth, the
     // parent is just carrying it and listing both is noise.
+    // The parent/child test needs the snapshot's OWN separator: walker snapshots declare it
+    // (path.sep on the machine that walked), MFT snapshots predate the field and are always '\\'.
+    // With '\\' hard-coded, every posix snapshot failed this test and listed the whole ancestor
+    // chain of any grown folder, burying the culprit under its own parents.
+    const SEP = A.sep || '\\';
     const kept = [];
     for (const r of rows) {
       const childCovers = rows.some((o) =>
-        o !== r && o.path.startsWith(r.path + '\\') && Math.abs(o.deltaGB - r.deltaGB) < 0.15 * Math.abs(r.deltaGB || 1));
+        o !== r && o.path.startsWith(r.path + SEP) && Math.abs(o.deltaGB - r.deltaGB) < 0.15 * Math.abs(r.deltaGB || 1));
       if (!childCovers) kept.push(r);
     }
     return {
