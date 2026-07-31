@@ -1408,18 +1408,60 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
 /* ---- outcomes ledger page (B2, 2026-07-31). The headline claim promoted to a surface: what
    fired HERE, what cleared it, how long each fix held, which levers measurably moved the number.
    Wins and losses render identically — a ledger that only remembers its wins is advertising. ---- */
-#p-led .lg-row{display:grid;grid-template-columns:minmax(150px,1.45fr) .5fr .65fr .65fr .8fr minmax(120px,1.35fr);gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:11.5px;align-items:baseline}
+/* DENSITY IS THE POINT OF THIS PAGE, not an optimisation of it. The first cut showed six findings
+   and five rows per panel on a 820px window - fewer facts than the DIAG sentence it was meant to
+   expand on. Rows are 5.5px tall in padding terms and the name column is given real width, because
+   the name is the content and everything else is a number that fits in nine characters. */
+#p-led .lg-row{display:grid;grid-template-columns:minmax(210px,2.1fr) .46fr .62fr .62fr .62fr .72fr minmax(112px,1.15fr);
+  gap:9px;padding:5px 0;border-bottom:1px solid var(--line-2);font-size:11.5px;align-items:baseline}
 #p-led .lg-row:last-child{border-bottom:0}
-#p-led .lg-row.h{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:2px 0 6px}
+#p-led .lg-row.h{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:2px 0 5px}
 #p-led .lg-row b{font-weight:500;color:var(--ink)}
 #p-led .lg-num{font-variant-numeric:tabular-nums;white-space:nowrap}
 #p-led .lg-id{display:flex;align-items:baseline;gap:7px;min-width:0}
 #p-led .lg-id i{width:7px;height:7px;border-radius:2px;flex:none;align-self:center}
 #p-led .lg-id span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#p-led .lg-ev{display:grid;grid-template-columns:92px minmax(140px,1.6fr) .7fr .7fr minmax(110px,1.2fr);gap:10px;padding:5.5px 0;border-bottom:1px solid var(--line-2);font-size:11px;align-items:baseline}
+/* EXPANDABLE, because a truncated record is the one thing this page cannot be. Where a cell must
+   still clip, the row opens to the full history rather than leaving an ellipsis as the last word. */
+#p-led .lg-row.x{cursor:pointer}
+#p-led .lg-row.x:hover{background:rgba(var(--fg),.028)}
+#p-led .lg-row.x .lg-id span::after{content:'';display:inline-block;width:0;height:0;margin-left:6px;
+  border:3px solid transparent;border-left-color:var(--ink-3);vertical-align:middle;transition:transform .15s}
+#p-led .lg-row.x.open .lg-id span::after{transform:rotate(90deg)}
+#p-led .lg-detail{padding:6px 0 9px 16px;border-bottom:1px solid var(--line-2);
+  box-shadow:inset 2px 0 0 rgba(var(--acc2),.22)}
+#p-led .lg-detail .dh{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;margin:4px 0 3px}
+#p-led .lg-ev{display:grid;grid-template-columns:66px minmax(130px,1.9fr) .58fr .54fr minmax(90px,1fr);
+  gap:9px;padding:4.5px 0;border-bottom:1px solid var(--line-2);font-size:10.5px;align-items:baseline}
 #p-led .lg-ev:last-child{border-bottom:0}
 #p-led .lg-ev .t{color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 #p-led .lg-ev .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The context column WRAPS rather than clipping. "while open: growth, disk_low, battery..." was the
+   worst ellipsis on the page - it truncated the very thing that makes a lever meaningful, which is
+   what was wrong at the time it was pulled. Two lines of real text beat one line and a lie. */
+#p-led .lg-ev .what.wrap{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.34}
+/* The narrow panel gets four columns; the expanded row, at full page width, gets five. */
+#p-led .lg-ev.narrow{grid-template-columns:66px minmax(120px,2fr) .6fr .56fr}
+/* Cleanups by target - the literal answer to "which levers actually moved the number", and the
+   category that was missing entirely. */
+#p-led .lg-cl{display:grid;grid-template-columns:minmax(70px,1fr) .42fr .72fr .66fr .66fr;
+  gap:6px;padding:5px 0;border-bottom:1px solid var(--line-2);font-size:10.5px;align-items:baseline}
+#p-led .lg-cl:last-child{border-bottom:0}
+#p-led .g3l{display:grid;grid-template-columns:.92fr 1.06fr 1.34fr;gap:11px}
+/* THE VERTICAL BUDGET, spent where the information is. Measured before tuning: hero 175 px and a
+   63 px prose footer were taking 30% of an 820 px window for the two least dense things on it,
+   while the findings table - the actual subject - got 174. Supporting text is set smaller, card
+   chrome is tightened, and the footer is one line instead of a paragraph. Nothing was removed;
+   the space was moved to the rows. */
+#p-led .hero{gap:10px}
+#p-led .hstat{padding:9px 12px}
+#p-led .hstat .hv{font-size:30px;margin-top:2px}
+#p-led .hstat .hs{font-size:9.5px;line-height:1.38;margin-top:4px}
+#p-led .card{padding:10px 12px}
+#p-led .card h3{margin:0 0 6px;font-size:10px}
+#p-led .lgfoot{flex:none;font-size:9.5px;line-height:1.45;color:var(--ink-3);padding:7px 2px 0}
+#p-led .lgfoot b{color:var(--ink-2);font-weight:500}
 /* SINGLE SCREEN, and the project's own scroll treatment.
    This shipped as `max-height:320px; overflow:auto` - a fixed pixel height and a visible bar, in an
    application that has neither anywhere else (nine other panels use the pattern below). Two of the
@@ -3181,6 +3223,16 @@ RENDER.led=async()=>{
       a.lastClearedAt=e.at; a.lastCycle=e; cycles.push(e);
     }else if(e.ev==='lever') levers.push(e);
   }
+  /* Cycles indexed by finding, so a row can open onto its OWN history instead of asking the reader
+     to scan a global timeline for it. */
+  const cycById={};
+  for(const c of cycles) (cycById[c.id]||(cycById[c.id]=[])).push(c);
+  for(const id of Object.keys(agg)){
+    const a=agg[id];
+    a.totalOpen=(a.durs||[]).reduce((n,v)=>n+v,0);
+    a.worst=a.durs.length?Math.max(...a.durs):null;
+    a.firstAt=(cycById[id]&&cycById[id][0])?cycById[id][0].firedAt:null;
+  }
   const ids=Object.keys(agg).sort((x,y)=>agg[y].fired-agg[x].fired);
   const totFired=ids.reduce((n,k)=>n+agg[k].fired,0);
   const openIds=Object.keys(active);
@@ -3188,6 +3240,19 @@ RENDER.led=async()=>{
   const cleans=levers.filter(l=>l.kind==='clean'&&l.detail&&typeof l.detail.freedGB==='number');
   const cleanedGB=cleans.reduce((n,l)=>n+l.detail.freedGB,0);
   const firstAt=evs[0].at;
+  /* Per-target cleanup fold. The ledger already records every clean with what it MEASURABLY
+     returned; nothing was aggregating it, so the page could not answer the one question B2 exists
+     for - which lever actually moved the number. Wins and losses fold identically: a target that
+     has returned 6.30 GB and one that has returned -0.02 GB sit in the same table. */
+  const clAgg={};
+  for(const l of cleans){
+    const k=l.detail.key||'?';
+    const c=clAgg[k]||(clAgg[k]={runs:0,total:0,best:null,worst:null,lastAt:0});
+    c.runs++; c.total+=l.detail.freedGB; c.lastAt=Math.max(c.lastAt,l.at);
+    if(c.best==null||l.detail.freedGB>c.best) c.best=l.detail.freedGB;
+    if(c.worst==null||l.detail.freedGB<c.worst) c.worst=l.detail.freedGB;
+  }
+  const clKeys=Object.keys(clAgg).sort((x,y)=>clAgg[y].total-clAgg[x].total);
 
   const frow=id=>{const a=agg[id];
     const status=active[id]?`<b style="color:var(--warn)">open ${agoT(active[id].firedAt)}</b>`
@@ -3195,33 +3260,41 @@ RENDER.led=async()=>{
     const cyc=a.lastCycle;
     const lv=(cyc&&cyc.levers&&cyc.levers.length)?levList(cyc.levers)
       :cyc?`<span class="muted2">cleared on its own · <span class="${dCls(dFree(cyc))}">${dTxt(dFree(cyc))} free</span></span>`:NOVAL;
-    return `<div class="lg-row">
+    const n=(cycById[id]||[]).length;
+    return `<div class="lg-row x" data-fid="${esc(id)}">
       <div class="lg-id" title="${esc(a.title||id)}"><i style="background:var(${sevCol[a.sev]||'--net'})"></i><span>${esc(shortT(a.title)||id)}</span></div>
       <span class="lg-num">×${a.fired}</span>
       <span class="lg-num">${durT(med(a.durs))}</span>
+      <span class="lg-num">${durT(a.worst)}</span>
+      <span class="lg-num">${durT(a.totalOpen)}</span>
       <span class="lg-num">${a.holds.length?durT(med(a.holds)/1000):NOVAL}</span>
-      <span class="lg-num">${status}</span>
-      <span class="what">${lv}</span></div>`;};
+      <span class="lg-num">${status}</span></div>
+      <div class="lg-detail" data-for="${esc(id)}" hidden>
+        <div class="dh">every cycle of this finding · ${n} recorded${a.firstAt?` · first seen ${when(a.firstAt)}`:''}</div>
+        ${(cycById[id]||[]).slice().reverse().map((c)=>cycRow(c,true)).join('')||'<div class="muted2" style="font-size:10.5px">no completed cycle yet — it has fired but never cleared</div>'}
+      </div>`;};
   /* same derivation the engine uses for its `short` field: claim before the separator */
   function shortT(t){ if(!t) return ''; const cut=String(t).split(' — ')[0].split(' · ')[0].trim(); return cut.length>=12?cut:String(t); }
 
-  const cycRow=c=>{const a=agg[c.id]||{}; const d=dFree(c);
-    return `<div class="lg-ev">
+  const cycRow=(c,wide)=>{const a=agg[c.id]||{}; const d=dFree(c);
+    return `<div class="lg-ev${wide?'':' narrow'}">
       <span class="t">${when(c.at)}</span>
       <span class="what" title="${esc(a.title||c.id)}"><i style="display:inline-block;width:6px;height:6px;border-radius:2px;background:var(${sevCol[a.sev]||'--net'});margin-right:6px"></i>${esc(shortT(a.title)||c.id)}</span>
       <span class="lg-num">open ${durT(c.durSec)}</span>
       <span class="lg-num ${dCls(d)}">${dTxt(d)}</span>
-      <span class="what">${(c.levers&&c.levers.length)?levList(c.levers):'<span class="muted2">no lever pulled</span>'}</span></div>`;};
+      ${wide?`<span class="what">${(c.levers&&c.levers.length)
+        ?`<b style="font-weight:500;color:var(--ink)">${c.levers.map(levTxt).join(' · ')}</b>`
+        :'<span class="muted2">cleared on its own</span>'}</span>`:''}</div>`;};
 
-  const levRow=l=>`<div class="lg-ev" style="grid-template-columns:92px 1.6fr 2fr">
+  const levRow=l=>`<div class="lg-ev" style="grid-template-columns:74px 1.5fr 1.15fr">
       <span class="t">${when(l.at)}</span>
-      <span class="what">${levTxt(l)}</span>
-      <span class="what muted2">${(l.during&&l.during.length)?'while open: '+l.during.map(esc).join(', '):'nothing open at the time'}</span></div>`;
+      <span class="what wrap"><b style="font-weight:500;color:var(--ink)">${levTxt(l)}</b></span>
+      <span class="what wrap muted2">${(l.during&&l.during.length)?'while open: '+l.during.map(esc).join(', '):'nothing open at the time'}</span></div>`;
 
   el.innerHTML=`
     <div class="hd"><h2>Outcomes</h2><span class="n">${evs.length} recorded events since ${when(firstAt)} · this machine only</span>
       <span class="sp"></span><button class="btn" id="ledRe" style="letter-spacing:0;text-transform:none">Refresh</button></div>
-    <div class="hero" style="grid-template-columns:repeat(3,1fr)">
+    <div class="hero" style="grid-template-columns:repeat(4,1fr)">
       <div class="hstat" style="--acc:var(--warn)">
         <div class="hl"><i></i>Findings fired</div>
         <div class="hv">${totFired}<small>· ${ids.length} distinct</small></div>
@@ -3232,28 +3305,51 @@ RENDER.led=async()=>{
         <div class="hv">${cycles.length}<small>cycles</small></div>
         <div class="hs">median time-to-clear ${durT(med(allDurs))} — measured from fire to clear, not estimated.</div>
       </div>
+      <div class="hstat" style="--acc:var(--crit)">
+        <div class="hl"><i></i>Open right now</div>
+        <div class="hv">${openIds.length}<small>${openIds.length?'· longest '+agoT(Math.min(...openIds.map(k=>active[k].firedAt))):'all clear'}</small></div>
+        <div class="hs">${openIds.length?'still firing — the table below marks each one open, and a row opens onto its own history.':'nothing is currently firing on this machine.'}</div>
+      </div>
       <div class="hstat" style="--acc:var(--cpu)">
         <div class="hl"><i></i>Levers pulled</div>
         <div class="hv">${levers.length}<small>${cleans.length?`· cleans returned ${fmt(cleanedGB,1)} GB`:''}</small></div>
         <div class="hs">${cleans.length?`across ${cleans.length} measured cleanups — including the ones that returned nothing.`:'kills, dials, task toggles and cleanups, each ledgered with a metric snapshot.'}</div>
       </div>
     </div>
-    <div class="card lgcard"><h3>What has fired here <span class="muted">· by count</span></h3>
-      <div class="lg-row h"><span>finding</span><span>fired</span><span>typical clear</span><span>stays clear</span><span>status</span><span>last cycle</span></div>
+    <div class="card lgcard"><h3>What has fired here <span class="muted">· by count · click a row for its own history</span></h3>
+      <div class="lg-row h"><span>finding</span><span>fired</span><span>typical</span><span>worst</span><span>total open</span><span>stays clear</span><span>status</span></div>
       <div class="lg-table">${ids.map(frow).join('')}</div></div>
-    <div class="g2" style="grid-template-columns:1.35fr 1fr">
-      <div class="card" style="margin-bottom:0"><h3>Every cycle <span class="muted">· newest first · Δ is C: free, recorded at fire and at clear</span></h3>
-        <div class="lscroll">${cycles.slice().reverse().map(cycRow).join('')||'<div class="empty">no completed cycles yet</div>'}</div></div>
-      <div class="card" style="margin-bottom:0"><h3>Levers <span class="muted">· what was actually done, and what it measurably returned</span></h3>
+    <div class="g2 g3l">
+      <div class="card" style="margin-bottom:0"><h3>Cleanups by target <span class="muted">· which lever moved the number</span></h3>
+        <div class="lg-cl h" style="font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:600">
+          <span>target</span><span>runs</span><span>returned</span><span>best</span><span>worst</span></div>
+        <div class="lscroll">${clKeys.length?clKeys.map(k=>{const c=clAgg[k];
+          return `<div class="lg-cl"><span title="${esc(k)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(k)}</span>
+            <span class="lg-num">×${c.runs}</span>
+            <span class="lg-num ${dCls(c.total)}">${dTxt(+c.total.toFixed(2))}</span>
+            <span class="lg-num ${dCls(c.best)}">${dTxt(c.best)}</span>
+            <span class="lg-num ${dCls(c.worst)}">${dTxt(c.worst)}</span></div>`;}).join('')
+          :'<div class="empty">no cleanups recorded yet</div>'}</div></div>
+      <div class="card" style="margin-bottom:0"><h3>Every cycle <span class="muted">· newest first · Δ is free space at fire vs at clear</span></h3>
+        <div class="lscroll">${cycles.slice().reverse().map((c)=>cycRow(c,false)).join('')||'<div class="empty">no completed cycles yet</div>'}</div></div>
+      <div class="card" style="margin-bottom:0"><h3>Levers <span class="muted">· what was done, and what it measurably returned</span></h3>
         <div class="lscroll">${levers.slice().reverse().map(levRow).join('')||'<div class="empty">no levers pulled yet — findings so far cleared on their own</div>'}</div></div>
     </div>
-    <div class="card" style="margin-top:12px;margin-bottom:0"><div class="note" style="margin-top:0">
-      Append-only record at <b>history/outcomes.jsonl</b>. A cleanup that returned <b>0.00 GB</b> is
-      recorded as returning nothing, next to the one that returned 2.3 GB — the record is only worth
-      quoting because it cannot flatter. When a finding fires again, DIAG cites this ledger:
-      <i>"last time this fired, it cleared after…"</i> — what worked on <b>this machine</b>, which is
-      the sentence no tool without a per-machine history can say.</div></div>`;
+    <div class="lgfoot">Append-only at <b>history/outcomes.jsonl</b> · a cleanup that returned
+      <b>0.00 GB</b> is recorded next to one that returned 6.30 — the record is only worth quoting
+      because it cannot flatter · DIAG cites it whenever a finding fires again.</div>`;
   $('#ledRe').onclick=()=>RENDER.led();
+  /* Delegated, so it survives the table being re-rendered on Refresh. A row opens onto its own
+     cycles - the answer to "what actually happened with THIS finding" without scanning a global
+     timeline for it. */
+  el.querySelectorAll('.lg-row.x').forEach((row)=>{
+    row.addEventListener('click',()=>{
+      const d=el.querySelector(`.lg-detail[data-for="${row.dataset.fid}"]`);
+      if(!d) return;
+      const open=!d.hidden;
+      d.hidden=open; row.classList.toggle('open',!open);
+    });
+  });
 };
 
 /* ================= TIME: clock, stopwatch, and a stopwatch that REMEMBERS =================
