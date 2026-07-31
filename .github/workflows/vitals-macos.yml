@@ -246,7 +246,10 @@ jobs:
 
       - name: Sudo is available (the elevated paths are testable here)
         if: always()
-        run: sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: NO"
+        # Block scalar, not a plain one: the colons inside the echo strings would otherwise be
+        # parsed as YAML mappings - the exact parse failure that made run #1 die with zero jobs.
+        run: |
+          sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: NO"
 
       # The native panel host. It cannot be compiled on the machine it was written on, so CI is the
       # only thing standing between "250 lines of Swift" and "250 lines of Swift that build". An
