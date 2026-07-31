@@ -1,0 +1,164 @@
+# VITALS - run the Linux collector on a real kernel.
+#
+# WHY THIS EXISTS, given the Linux plug was already "verified end to end". That run was on WSL2,
+# which is a VM: no battery, no /sys/class/drm cards, no thermal zones - so power(), gpuSys() and
+# temps() were only ever proven to return nothing CORRECTLY. WSL also proxies powershell.exe through
+# Windows interop, which once let a Linux test pass while masking every PowerShell dependency in the
+# codebase. A green suite there is a weaker claim than it looks.
+#
+# A GitHub runner is also a VM and also has no battery or GPU. What it adds is a kernel that is not
+# WSL, no Windows interop to hide behind, and a clean machine every run.
+#
+# THE OTHER HALF OF THIS FILE'S JOB is capture. Several capabilities are unwritten because nobody
+# here has seen the file they would parse - /proc/net/tcp, /proc/pressure, systemd unit listings.
+# Those get uploaded as an artifact so the readers are written against real bytes. Writing them from
+# documentation is exactly how the macOS collector acquired every defect it has since had to lose.
+
+name: vitals · Linux
+
+on:
+  push:
+    paths: ['vitals/**', '.github/workflows/vitals-linux.yml']
+  pull_request:
+    paths: ['vitals/**']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: vitals
+
+jobs:
+  linux:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        node: ['20']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: What machine is this
+        run: |
+          echo "kernel:  $(uname -r)"
+          echo "distro:  $(. /etc/os-release && echo "$PRETTY_NAME")"
+          echo "cores:   $(nproc)"
+          echo "memory:  $(free -m | awk '/^Mem:/{print $2" MB"}')"
+          echo "node:    $(node --version)"
+          echo "wsl:     $(grep -qi microsoft /proc/version && echo YES || echo no)"
+
+      # Capture BEFORE testing, and capture the files nothing parses YET. This artifact is the
+      # input for net.sockets, mem.pressure and scan.startup - the three readers still unwritten
+      # because no one here has seen their output.
+      - name: Capture real /proc and /sys
+        if: always()
+        run: |
+          OUT=linux-fixtures.txt
+          sec() { printf '\n===== %s =====\n' "$1" >> $OUT; }
+          : > $OUT
+          echo "kernel $(uname -r) · $(. /etc/os-release && echo $PRETTY_NAME)" >> $OUT
+
+          # --- already parsed: proves the existing readers still match this kernel
+          for f in /proc/stat /proc/meminfo /proc/diskstats /proc/net/dev /proc/uptime /proc/vmstat; do
+            sec "$f"; head -40 "$f" >> $OUT 2>&1
+          done
+          sec "/proc/cpuinfo (first core)"; sed -n '1,30p' /proc/cpuinfo >> $OUT 2>&1
+
+          # --- NOT parsed yet. These decide whether the remaining capabilities are reachable.
+          sec "/proc/net/tcp  [net.sockets]";  head -12 /proc/net/tcp  >> $OUT 2>&1
+          sec "/proc/net/tcp6 [net.sockets]";  head -6  /proc/net/tcp6 >> $OUT 2>&1
+          sec "/proc/net/udp  [net.sockets]";  head -6  /proc/net/udp  >> $OUT 2>&1
+          sec "ss -tanp (socket->pid, the join we need)"; ss -tanp 2>&1 | head -15 >> $OUT
+          sec "/proc/pressure/cpu    [mem.pressure]"; cat /proc/pressure/cpu    >> $OUT 2>&1 || echo "(no PSI)" >> $OUT
+          sec "/proc/pressure/memory [mem.pressure]"; cat /proc/pressure/memory >> $OUT 2>&1 || echo "(no PSI)" >> $OUT
+          sec "/proc/pressure/io     [mem.pressure]"; cat /proc/pressure/io     >> $OUT 2>&1 || echo "(no PSI)" >> $OUT
+          sec "systemctl list-unit-files --state=enabled [scan.startup]"
+          systemctl list-unit-files --type=service --state=enabled --no-pager 2>&1 | head -20 >> $OUT
+          sec "systemd-analyze blame [scan.startup]"; systemd-analyze blame --no-pager 2>&1 | head -12 >> $OUT
+          sec "XDG autostart [scan.startup]"; ls -1 /etc/xdg/autostart ~/.config/autostart 2>&1 | head -15 >> $OUT
+
+          # --- absent on a runner, captured so the empty shape is on record rather than assumed
+          sec "/sys/class/power_supply [battery]"; ls -1 /sys/class/power_supply 2>&1 | head >> $OUT
+          sec "/sys/class/drm [gpu]";              ls -1 /sys/class/drm 2>&1 | head >> $OUT
+          sec "/sys/class/thermal [temps]";        ls -1 /sys/class/thermal 2>&1 | head >> $OUT
+          sec "/sys/block [whole disks]";          ls -1 /sys/block 2>&1 | head >> $OUT
+          wc -c $OUT
+
+      - name: Upload /proc capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-fixtures-${{ matrix.os }}
+          path: vitals/linux-fixtures.txt
+          if-no-files-found: warn
+
+      - name: Parser fixtures against captured kernel text
+        if: always()
+        run: node collect/test-linux.js
+
+      - name: Route guard + capability manifest
+        if: always()
+        run: node test-routes.js
+
+      - name: Action layer + growth walker suite
+        if: always()
+        run: node test-actions-posix.js
+
+      - name: Inspection layer suite
+        if: always()
+        run: node test-inspect-posix.js
+
+      # THE ONE THAT MATTERS. Cross-checks the running collector against df, free, nproc and
+      # /proc/meminfo - independent authorities, because a collector agreeing with itself proves
+      # nothing. This has only ever run under WSL.
+      - name: LIVE collector on a real kernel
+        if: always()
+        run: node collect/test-linux-live.js
+
+      # Applies known load and confirms the counters MOVE. A collector that reads plausible constants
+      # passes every correctness check ever written.
+      - name: Stimulus - do the numbers actually move
+        if: always()
+        run: node collect/test-linux-stimulus.js
+
+      - name: Growth walker over a real home
+        if: always()
+        run: |
+          node growthscan.js --root "$HOME" --out /tmp/walk.json --min 1
+          node -e '
+            const s = require("/tmp/walk.json"); let bad = 0;
+            const need = { "scanner tagged": s.scanner === "walk-1", "sep is /": s.sep === "/",
+                           "walked something": s.dirs > 0 && s.files > 0, "total > 0": s.totalBytes > 0,
+                           "denied is a count": Number.isInteger(s.denied) };
+            for (const [k, v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+            console.log(`  ${s.dirs} dirs, ${s.files} files, ${(s.totalBytes/2**30).toFixed(2)} GB, ${s.denied} denied`);
+            process.exit(bad ? 1 : 0);'
+
+      - name: Bridge boots and serves a real sample
+        if: always()
+        run: |
+          VITALS_PORT=8790 node bridge.js &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:8790/api/caps >/dev/null && break; sleep 0.5; done
+          sleep 12
+          node -e '
+            const http = require("http");
+            http.get({host:"127.0.0.1",port:8790,path:"/api/latest"}, r => {
+              let b=""; r.on("data",c=>b+=c); r.on("end",()=>{
+                const l=JSON.parse(b); let bad=0;
+                const need = {"cpu.total": l.cpu && l.cpu.total != null,
+                              "cpu.cores populated": l.cpu && Array.isArray(l.cpu.cores) && l.cpu.cores.length > 0,
+                              "mem.usedMB": l.mem && l.mem.usedMB > 0,
+                              "disk.vols": l.disk && l.disk.vols && l.disk.vols.length > 0,
+                              "disk.devices emitted": l.disk && Array.isArray(l.disk.devices),
+                              "net.ifaces emitted": l.net && Array.isArray(l.net.ifaces),
+                              "proc rows": l.proc && l.proc.length > 0};
+                for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+                console.log("  battery: " + JSON.stringify(l.pwr && l.pwr.bat) + "   gpu: " + JSON.stringify(l.gpu));
+                console.log("  (both null here is CORRECT - a runner has neither)");
+                process.exit(bad ? 1 : 0);
+              });
+            }).on("error", e => { console.error("bridge unreachable: " + e.message); process.exit(1); });'
