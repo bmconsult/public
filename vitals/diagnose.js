@@ -61,7 +61,7 @@ function pastText(p) {
 /**
  * @param tick   latest metrics sample
  * @param hist   History instance
- * @param extra  { growth?, snapshot?, startupCount? }
+ * @param extra  { growth?, snapshot?, startupCount?, outcomes?, maint?, trend? }
  */
 function diagnose(tick, hist, extra = {}) {
   if (!tick) return { findings: [], summary: 'waiting for data', ready: false };
@@ -389,6 +389,53 @@ function diagnose(tick, hist, extra = {}) {
         action: 'Growth tab for the full list.',
         confidence: 'high',
       });
+    }
+  }
+
+  /* ---------- 8. predictive — fire BEFORE the wall, or say nothing (B3, 2026-07-31) ----------
+   * Generalises the growth rule's extrapolation from one directory to the volume itself, over
+   * the minute rollups (history.trend). THE GUARD IS THE FEATURE: every gate below exists to
+   * stop a noisy trend from producing a confident date. When any gate fails there is no
+   * watered-down guess — the plain current-state findings above ARE the honest degraded
+   * answer. And a prediction is a claim, so the finding states the model, the fit quality and
+   * the interval, never just the date.
+   *
+   * Fires only while the wall is still AHEAD (pct < 90): past it, disk_low and the spiral own
+   * the present tense, and stacking a forecast on top of an alarm is noise. The outcomes
+   * ledger's SUPPRESSORS map knows disk_low/spiral absorb this finding, so the handover is
+   * recorded as absorption, not as a "cleared" at the exact moment things got worse. */
+  const tr = extra.trend && extra.trend.diskFree;
+  if (tr && vol.pct > 0 && vol.pct < 90 && vol.sizeGB > 1) {
+    const rate = -tr.perDay;                          // GB LOST per day; positive = filling
+    const wallGB = vol.sizeGB * 0.10;                 // the 10%-free line disk_low fires at
+    const gbAbove = vol.freeGB - wallGB;
+    const slopeReal = tr.sePerDay > 0 ? rate / tr.sePerDay >= 3 : rate > 0;   // ≥3σ from noise
+    if (rate >= 0.1 && gbAbove > 0 &&
+        tr.n >= 24 && tr.spanDays >= 1.5 &&           // at least a real day and a half of hours
+        tr.r2 >= 0.5 && slopeReal) {
+      const eta = gbAbove / rate;
+      const etaLo = gbAbove / (rate + tr.sePerDay);
+      const etaHi = tr.sePerDay < rate ? gbAbove / (rate - tr.sePerDay) : null;
+      const fd = (d) => d < 1.5 ? '~1 day' : '~' + Math.round(d) + ' days';
+      if (eta <= 45) {
+        add({
+          id: 'disk_fill_ahead', sev: eta <= 7 ? S.WARN : S.INFO,
+          title: `C: is on course to cross 10% free in ${fd(eta)} — the line where SSDs start slowing down`,
+          because: `Free space has fallen at ${rate.toFixed(2)} GB/day across the measured ` +
+                   `${tr.spanDays.toFixed(1)} days. From today's ${vol.freeGB} GB the ` +
+                   `${wallGB.toFixed(0)} GB line (10% of ${vol.sizeGB} GB) is ${gbAbove.toFixed(1)} GB away` +
+                   (etaHi ? ` — ${fd(etaLo)} to ${fd(etaHi)} inside the fit's ±1σ band` : '') +
+                   `. This fires before the wall on purpose: past it every write is slower, and the ` +
+                   `cleanup happens under pressure instead of at leisure.`,
+          evidence: [
+            `${vol.freeGB} GB free of ${vol.sizeGB} GB now (${(100 - vol.pct).toFixed(1)}% free)`,
+            `trend −${rate.toFixed(2)} GB/day ± ${tr.sePerDay.toFixed(2)} (1σ) · R² ${tr.r2.toFixed(2)} · ${tr.n} hourly medians over ${tr.spanDays.toFixed(1)} days`,
+            `model: straight-line least squares over rollup medians — a big delete or cleanup resets the clock and the fit`,
+          ],
+          action: 'Growth tab shows what is growing; Reclaim shows what comes back. Cheap now, urgent later.',
+          confidence: tr.r2 >= 0.8 ? 'high' : 'medium',
+        });
+      }
     }
   }
 

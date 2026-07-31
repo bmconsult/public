@@ -171,6 +171,53 @@ class History {
     return out;
   }
 
+  /* ---------- B3: trend over the rollups (2026-07-31, MARKET_RESEARCH §9) ----------
+   * Least-squares fit over HOURLY MEDIANS of the minute rollups' avg column, so a predictive
+   * rule can say "at the measured rate, N days to the wall" — and, just as important, refuse
+   * to. The fit therefore returns its own honesty alongside the slope: r², the slope's
+   * standard error, and the span actually covered. Callers gate on those and fall back to the
+   * plain current-state finding when the trend is noise; a confidently wrong prediction is
+   * worse than a late one.
+   *
+   * Hourly medians rather than raw minutes: the median ignores the single minute a cache was
+   * emptied, while an hour is still fine-grained enough to catch a 20 GB/day runaway inside
+   * its first day. A real structural break (a big cleanup mid-window) wrecks the r² and the
+   * fit disqualifies itself — which is the designed behaviour, not a failure mode. */
+  trend(key, days = 14) {
+    const buckets = new Map();                       // hour index -> values seen in that hour
+    for (const r of this.range(days)) {
+      const v = Array.isArray(r[key]) ? r[key][1] : (typeof r[key] === 'number' ? r[key] : null);
+      if (typeof v !== 'number' || Number.isNaN(v)) continue;
+      const h = Math.floor(r.t / 3600_000);
+      if (!buckets.has(h)) buckets.set(h, []);
+      buckets.get(h).push(v);
+    }
+    const pts = [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([h, vals]) => {
+      const s = vals.sort((a, b) => a - b);
+      return { t: h * 3600_000, v: s[Math.floor((s.length - 1) / 2)] };
+    });
+    if (pts.length < 2) return null;                 // one point is a value, not a trend
+    const t0 = pts[0].t;
+    const xs = pts.map((p) => (p.t - t0) / 86400_000);   // days since the first point
+    const ys = pts.map((p) => p.v);
+    const n = pts.length;
+    const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+    let sxx = 0, sxy = 0, syy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = xs[i] - mx, dy = ys[i] - my;
+      sxx += dx * dx; sxy += dx * dy; syy += dy * dy;
+    }
+    if (sxx === 0) return null;                      // all points in one hour — no time axis
+    const base = { key, n, spanDays: +xs[n - 1].toFixed(2), last: ys[n - 1], lastTs: pts[n - 1].t };
+    if (syy === 0)                                   // perfectly flat: a measured absence of trend
+      return { ...base, perDay: 0, sePerDay: 0, r2: 1 };
+    const slope = sxy / sxx;
+    const r2 = (sxy * sxy) / (sxx * syy);
+    const sse = Math.max(syy - slope * sxy, 0);
+    const se = n > 2 ? Math.sqrt(sse / (n - 2) / sxx) : Infinity;
+    return { ...base, perDay: +slope.toFixed(4), sePerDay: +(+se).toFixed(4), r2: +r2.toFixed(3) };
+  }
+
   pruneOldRollups() {
     const cutoff = Date.now() - KEEP_DAYS * 86400_000;
     try {

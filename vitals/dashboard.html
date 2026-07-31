@@ -1405,6 +1405,24 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
 .page.on>*:nth-child(5){animation-delay:.18s}
 @media (prefers-reduced-motion:reduce){.page.on>*{animation:none}}
 
+/* ---- outcomes ledger page (B2, 2026-07-31). The headline claim promoted to a surface: what
+   fired HERE, what cleared it, how long each fix held, which levers measurably moved the number.
+   Wins and losses render identically — a ledger that only remembers its wins is advertising. ---- */
+#p-led .lg-row{display:grid;grid-template-columns:minmax(150px,1.45fr) .5fr .65fr .65fr .8fr minmax(120px,1.35fr);gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:11.5px;align-items:baseline}
+#p-led .lg-row:last-child{border-bottom:0}
+#p-led .lg-row.h{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding:2px 0 6px}
+#p-led .lg-row b{font-weight:500;color:var(--ink)}
+#p-led .lg-num{font-variant-numeric:tabular-nums;white-space:nowrap}
+#p-led .lg-id{display:flex;align-items:baseline;gap:7px;min-width:0}
+#p-led .lg-id i{width:7px;height:7px;border-radius:2px;flex:none;align-self:center}
+#p-led .lg-id span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#p-led .lg-ev{display:grid;grid-template-columns:92px minmax(140px,1.6fr) .7fr .7fr minmax(110px,1.2fr);gap:10px;padding:5.5px 0;border-bottom:1px solid var(--line-2);font-size:11px;align-items:baseline}
+#p-led .lg-ev:last-child{border-bottom:0}
+#p-led .lg-ev .t{color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+#p-led .lg-ev .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#p-led .lscroll{max-height:320px;overflow:auto;padding-right:4px}
+#p-led .muted2{color:var(--ink-3)}
+
 #toast{
   position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(70px);z-index:50;
   background:var(--tip-bg);border:1px solid var(--line);border-radius:6px;padding:9px 15px;
@@ -1424,6 +1442,7 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
     <div class="rb" data-go="net"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.8 2.6 15.2 0 18M12 3c-2.6 2.8-2.6 15.2 0 18"/></svg><span class="tip">Network</span></div>
     <div class="rb" data-go="therm"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg><span class="tip">Thermals</span></div>
     <div class="rb" data-go="diag"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9.5 20h5M10 22h4"/></svg><span class="tip">Diagnose</span><i class="badge" id="diagBadge"></i></div>
+    <div class="rb" data-go="led"><svg viewBox="0 0 24 24"><path d="M6 3h10.5L19 5.5V21H6z"/><path d="M9 8h6.5M9 11.5h6.5M9 15h4M9 18h2.5"/></svg><span class="tip">Outcomes</span></div>
     <div class="rb" data-go="growth"><svg viewBox="0 0 24 24"><path d="M3 17l5.5-5.5 3.5 3.5L21 6"/><path d="M15 6h6v6"/></svg><span class="tip">Growth</span></div>
     <div class="rb" data-go="boot"><svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span class="tip">Startup</span></div>
     <div class="rb" data-go="clean"><svg viewBox="0 0 24 24"><path d="M3 7h18M8 7V4h8v3M6 7l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg><span class="tip">Reclaim</span></div>
@@ -1480,6 +1499,7 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
       <div class="page" id="p-net"></div>
       <div class="page" id="p-therm"></div>
       <div class="page" id="p-diag"></div>
+      <div class="page" id="p-led"></div>
       <div class="page" id="p-growth"></div>
       <div class="page" id="p-boot"></div>
       <div class="page" id="p-clean"></div>
@@ -1711,8 +1731,40 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
       gl.uniform1f(uP,E('press_g',(ease.press||0)/100,.05)); gl.drawArrays(gl.TRIANGLES,0,3);
     }catch(e){ __VB.fldErrs=++fldErrs; if(fldErrs===1) console.warn('field draw error (loop kept alive):',e); }
   }
-  loop();
+  /* ---- A1 fast-boot invariants (2026-07-31, MARKET_RESEARCH §9) ----
+     One real frame IMMEDIATELY after link, before any rAF exists. rAF does not tick in a
+     background, occluded or parked window, so a panel opened unfocused otherwise sits black
+     until it is first shown. This paint is deliberately unconditional: the gates (fps dial,
+     hidden, docked) belong to the LOOP's ongoing cost, not to the first frame's existence. */
+  function paintOnce(){
+    try{
+      size();
+      gl.uniform2f(uR,cv.width,cv.height);
+      gl.uniform1f(uT,(performance.now()-t0)/1000);
+      gl.uniform1f(uP,(ease.press||0)/100);
+      gl.drawArrays(gl.TRIANGLES,0,3);
+    }catch(e){ __VB.fldErrs=++fldErrs; }
+  }
+  paintOnce();
+  /* Deferred, GUARDED entry into the loop: the double rAF lands just after first contentful
+     paint; the 900 ms timer is the path that runs when rAF never fires at all. The display
+     watchdog can only re-arm a chain that DIED — this starts the chain that never ran, which
+     is a different failure with the same symptom. The guard means exactly one chain exists no
+     matter which path wins. */
+  let fieldBooted=false;
+  const goField=()=>{ if(fieldBooted) return; fieldBooted=true; loop(); };
+  requestAnimationFrame(()=>requestAnimationFrame(goField));
+  setTimeout(goField,900);
   window.__vitalsRearmField=()=>requestAnimationFrame(loop);   // watchdog resuscitation hook
+  /* Heal a bad boot instead of failing: booted while the window reported ~0x0, the backing
+     store latched at 2px. size() belts this on every DRAWN frame, but a loop that is skipping
+     (hidden, docked, fps 0) never draws — so the watchdog calls this on its 5 s clock. Returns
+     true only when it actually repaired something, so the caller can journal the event. */
+  window.__vitalsFieldHeal=()=>{
+    if(cv.width>2||!(innerWidth>7)) return false;
+    size(); if(cv.width<=2) return false;
+    paintOnce(); return true;
+  };
 })();
 
 /* ============ core: memory rings ============
@@ -1939,7 +1991,19 @@ const A0R=-Math.PI*0.75, SPANR=Math.PI*1.5;
     try{ if(draw()) ringDirty=false; }
     catch(e){ __VB.ringErrs=++drawErrs; if(drawErrs===1) console.warn('ring draw error (loop kept alive):',e); }
   }
-  requestAnimationFrame(loop);
+  /* ---- A1 fast-boot invariants (2026-07-31, MARKET_RESEARCH §9) ----
+     One real frame NOW, before any rAF is scheduled, then a guarded deferred entry into the
+     loop. A chain that NEVER STARTED is not a chain that died: the watchdog re-arms the second
+     and cannot help the first — a window opened hidden or parked at a screen edge gets no rAF
+     at all, so without the 900 ms timer the loop simply never begins. A window booted at 0x0
+     paints nothing here (geo() refuses degenerate boxes, correctly) and is repainted by the
+     ResizeObserver + blank-core guard the moment its box becomes real. */
+  try{ bake(); }catch{}
+  try{ draw(); }catch{}
+  let ringsBooted=false;
+  const goRings=()=>{ if(ringsBooted) return; ringsBooted=true; loop(); };
+  requestAnimationFrame(()=>requestAnimationFrame(goRings));
+  setTimeout(goRings,900);
   window.__vitalsRearm=()=>{ ringDirty=true; requestAnimationFrame(loop); };   // watchdog hook
   const wake=()=>{ ringDirty=true; };
   cv.addEventListener('mousemove',wake); cv.addEventListener('mouseleave',wake);
@@ -2186,6 +2250,7 @@ addEventListener('keydown',e=>{
   if(e.key==='r'||e.key==='R') go('rig');                // r for the control room
   if(e.key==='x'||e.key==='X') go('fx');                 // x for the light & sound desk
   if(e.key==='c'||e.key==='C') go('ctl');                // c for the machine's own dials
+  if(e.key==='l'||e.key==='L') go('led');                // l for the outcomes ledger
   const map={'1':'ov','2':'cpu','3':'mem','4':'disk','5':'net','6':'therm','7':'diag','8':'growth','9':'boot','0':'clean'};
   if(map[e.key]) go(map[e.key]);
 });
@@ -2932,7 +2997,7 @@ RENDER.diag=async()=>{
           ${chain||(hero?`<div class="dgx-ev">${(hero.evidence||[]).map(e=>`<span>${e}</span>`).join('')}</div>`:'')}
           ${hero?`<div class="dgx-do"><em>Do</em>${hero.action}<span style="white-space:nowrap">${confDots(hero.confidence)}</span></div>`:''}
           ${hero?leverHTML(hero):''}
-          ${hero&&hero.past?`<div class="dgx-past">${hero.past.text} <span style="opacity:.65">— outcomes ledger, this machine</span></div>`:''}
+          ${hero&&hero.past?`<div class="dgx-past">${hero.past.text} <span style="opacity:.65;cursor:pointer;text-decoration:underline dotted" onclick="go('led')" title="open the full ledger">— outcomes ledger, this machine</span></div>`:''}
         </div>
         ${rest.length?`<div class="dgx-rail"><div class="rl">Also found</div>
           ${rest.map(f=>`<div class="drf ${f.sevName}"><b>${f.title}</b><span>${f.action}</span>${leverHTML(f)}${f.past?`<span class="past">↺ ${f.past.text}</span>`:''}</div>`).join('')}
@@ -2998,6 +3063,143 @@ function wireLevers(root){
     }
   });
 }
+
+/* ---- B2 (2026-07-31): the outcomes ledger, promoted from one sentence to a surface ----
+ * MARKET_RESEARCH §3.2 calls this the actual moat — the one capability on the differentiator
+ * list no competitor can copy without a per-machine history — and until today it rendered as a
+ * single sentence on DIAG while the public landing page led with it. This page is presentation
+ * over data the bridge has recorded all along (history/outcomes.jsonl, append-only, written by
+ * the 30 s server-side loop whether or not any window exists): what has fired on THIS machine,
+ * what cleared it, how long each fix held, which levers measurably moved the number.
+ * Honesty rules carried over verbatim: every figure is a recorded measurement or a dash, and a
+ * cleanup that returned nothing renders exactly like one that returned 2.3 GB — a ledger that
+ * only remembers its wins is advertising. */
+RENDER.led=async()=>{
+  const el=$('#p-led');
+  el.innerHTML=`<div class="hd"><h2>Outcomes</h2></div><div class="card"><div class="empty"><span class="spin"></span> replaying the ledger…</div></div>`;
+  let r;
+  try{ r=await (await fetch('/api/outcomes?n=8000')).json(); }
+  catch(e){ el.innerHTML=`<div class="hd"><h2>Outcomes</h2></div><div class="card"><div class="empty">ledger unreadable: ${sysEsc(e.message)}</div></div>`; return; }
+  const evs=r.recent||[], active=r.active||{};
+  const esc=s=>sysEsc(String(s??''));
+  const agoT=t=>{const h=(Date.now()-t)/3600000; return h<1?Math.max(1,Math.round(h*60))+' min':h<48?h.toFixed(1)+' h':(h/24).toFixed(1)+' days';};
+  const durT=s=>s==null?NOVAL:s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':s<172800?(s/3600).toFixed(1)+' h':(s/86400).toFixed(1)+' days';
+  const med=a=>{if(!a.length)return null;const s=[...a].sort((x,y)=>x-y);return s[(s.length-1)>>1];};
+  const when=t=>{const d=new Date(t);return d.toLocaleDateString(undefined,{month:'short',day:'numeric'})+' '+d.toTimeString().slice(0,5);};
+  const sevCol={critical:'--crit',warning:'--warn',note:'--net'};
+  const levTxt=l=>{const d=l.detail||{};
+    return l.kind==='clean'?`clean ${esc(d.key||'')} → ${typeof d.freedGB==='number'?fmt(d.freedGB,2)+' GB back':NOVAL}`
+      :l.kind==='kill'?`killed ${(d.pids||[]).length} process${(d.pids||[]).length===1?'':'es'}${d.name?' ('+esc(d.name)+')':''}`
+      :l.kind==='task'?`task ${esc(d.name||'')} → ${d.enable?'on':'off'}`
+      :l.kind==='ctl'?`dial ${esc((d.params&&d.params.act)||d.act||'')}`
+      :l.kind==='restart-app'?`restarted ${esc(d.name||'')}`
+      :esc(l.kind);};
+  /* Long dial sessions tag every finding open at the time with every pull — 18 dial tweaks on one
+     battery note is a true record but an unreadable cell. Newest few + an honest count. */
+  const levList=ls=>{const t=ls.map(levTxt); return (t.length>4?`<span class="muted2">+${t.length-4} more · </span>`:'')+t.slice(-4).join(' · ');};
+  /* Δ of C: free across one cycle — rendered ONLY when both endpoints were recorded. `m0` is the
+     metric snapshot at fire, `m` at clear; a missing side is a dash, never a zero. */
+  const dFree=c=>(c&&c.m0&&c.m&&typeof c.m0.freeGB==='number'&&typeof c.m.freeGB==='number')?+(c.m.freeGB-c.m0.freeGB).toFixed(1):null;
+  const dTxt=v=>v==null?NOVAL:`${v>0?'+':''}${fmt(v,1)} GB`;
+  const dCls=v=>v==null?'muted2':v>0.4?'ok':v<-0.4?'warn':'muted2';
+
+  if(!evs.length){
+    el.innerHTML=`<div class="hd"><h2>Outcomes</h2></div>
+      <div class="card"><div class="empty" style="text-align:left;line-height:1.6">Nothing recorded yet — the ledger writes its first line the first time a finding fires.
+      From then on the bridge records every transition server-side, page open or not:
+      finding <b>fired</b> → lever <b>pulled</b> → measured <b>delta</b> → finding <b>cleared</b>.
+      When a finding fires again, DIAG quotes this record: what worked on <i>this</i> machine, not generic advice.</div></div>`;
+    return;
+  }
+
+  /* one replay pass — the same fold the bridge does, kept here so the page can aggregate */
+  const agg={}; const cycles=[]; const levers=[];
+  for(const e of evs){
+    if(e.ev==='fired'){
+      const a=agg[e.id]||(agg[e.id]={fired:0,cleared:0,durs:[],holds:[],title:'',sev:'note'});
+      a.fired++; if(e.title) a.title=e.title; if(e.sev) a.sev=e.sev;
+      if(a.lastClearedAt) a.holds.push(e.at-a.lastClearedAt);
+      a.lastFiredAt=e.at;
+    }else if(e.ev==='cleared'){
+      const a=agg[e.id]||(agg[e.id]={fired:0,cleared:0,durs:[],holds:[],title:'',sev:'note'});
+      a.cleared++; if(typeof e.durSec==='number') a.durs.push(e.durSec);
+      a.lastClearedAt=e.at; a.lastCycle=e; cycles.push(e);
+    }else if(e.ev==='lever') levers.push(e);
+  }
+  const ids=Object.keys(agg).sort((x,y)=>agg[y].fired-agg[x].fired);
+  const totFired=ids.reduce((n,k)=>n+agg[k].fired,0);
+  const openIds=Object.keys(active);
+  const allDurs=cycles.map(c=>c.durSec).filter(v=>typeof v==='number');
+  const cleans=levers.filter(l=>l.kind==='clean'&&l.detail&&typeof l.detail.freedGB==='number');
+  const cleanedGB=cleans.reduce((n,l)=>n+l.detail.freedGB,0);
+  const firstAt=evs[0].at;
+
+  const frow=id=>{const a=agg[id];
+    const status=active[id]?`<b style="color:var(--warn)">open ${agoT(active[id].firedAt)}</b>`
+      :a.lastClearedAt?`clear ${agoT(a.lastClearedAt)}`:NOVAL;
+    const cyc=a.lastCycle;
+    const lv=(cyc&&cyc.levers&&cyc.levers.length)?levList(cyc.levers)
+      :cyc?`<span class="muted2">cleared on its own · <span class="${dCls(dFree(cyc))}">${dTxt(dFree(cyc))} free</span></span>`:NOVAL;
+    return `<div class="lg-row">
+      <div class="lg-id" title="${esc(a.title||id)}"><i style="background:var(${sevCol[a.sev]||'--net'})"></i><span>${esc(shortT(a.title)||id)}</span></div>
+      <span class="lg-num">×${a.fired}</span>
+      <span class="lg-num">${durT(med(a.durs))}</span>
+      <span class="lg-num">${a.holds.length?durT(med(a.holds)/1000):NOVAL}</span>
+      <span class="lg-num">${status}</span>
+      <span class="what">${lv}</span></div>`;};
+  /* same derivation the engine uses for its `short` field: claim before the separator */
+  function shortT(t){ if(!t) return ''; const cut=String(t).split(' — ')[0].split(' · ')[0].trim(); return cut.length>=12?cut:String(t); }
+
+  const cycRow=c=>{const a=agg[c.id]||{}; const d=dFree(c);
+    return `<div class="lg-ev">
+      <span class="t">${when(c.at)}</span>
+      <span class="what" title="${esc(a.title||c.id)}"><i style="display:inline-block;width:6px;height:6px;border-radius:2px;background:var(${sevCol[a.sev]||'--net'});margin-right:6px"></i>${esc(shortT(a.title)||c.id)}</span>
+      <span class="lg-num">open ${durT(c.durSec)}</span>
+      <span class="lg-num ${dCls(d)}">${dTxt(d)}</span>
+      <span class="what">${(c.levers&&c.levers.length)?levList(c.levers):'<span class="muted2">no lever pulled</span>'}</span></div>`;};
+
+  const levRow=l=>`<div class="lg-ev" style="grid-template-columns:92px 1.6fr 2fr">
+      <span class="t">${when(l.at)}</span>
+      <span class="what">${levTxt(l)}</span>
+      <span class="what muted2">${(l.during&&l.during.length)?'while open: '+l.during.map(esc).join(', '):'nothing open at the time'}</span></div>`;
+
+  el.innerHTML=`
+    <div class="hd"><h2>Outcomes</h2><span class="n">${evs.length} recorded events since ${when(firstAt)} · this machine only</span>
+      <span class="sp"></span><button class="btn" id="ledRe" style="letter-spacing:0;text-transform:none">Refresh</button></div>
+    <div class="hero" style="grid-template-columns:repeat(3,1fr)">
+      <div class="hstat" style="--acc:var(--warn)">
+        <div class="hl"><i></i>Findings fired</div>
+        <div class="hv">${totFired}<small>· ${ids.length} distinct</small></div>
+        <div class="hs">${openIds.length?`${openIds.length} open right now`:'none open right now'} — every one recorded by the bridge's 30 s loop, window open or not.</div>
+      </div>
+      <div class="hstat" style="--acc:var(--ok)">
+        <div class="hl"><i></i>Cleared</div>
+        <div class="hv">${cycles.length}<small>cycles</small></div>
+        <div class="hs">median time-to-clear ${durT(med(allDurs))} — measured from fire to clear, not estimated.</div>
+      </div>
+      <div class="hstat" style="--acc:var(--cpu)">
+        <div class="hl"><i></i>Levers pulled</div>
+        <div class="hv">${levers.length}<small>${cleans.length?`· cleans returned ${fmt(cleanedGB,1)} GB`:''}</small></div>
+        <div class="hs">${cleans.length?`across ${cleans.length} measured cleanups — including the ones that returned nothing.`:'kills, dials, task toggles and cleanups, each ledgered with a metric snapshot.'}</div>
+      </div>
+    </div>
+    <div class="card"><h3>What has fired here <span class="muted">· by count</span></h3>
+      <div class="lg-row h"><span>finding</span><span>fired</span><span>typical clear</span><span>stays clear</span><span>status</span><span>last cycle</span></div>
+      ${ids.map(frow).join('')}</div>
+    <div class="g2" style="grid-template-columns:1.35fr 1fr">
+      <div class="card" style="margin-bottom:0"><h3>Every cycle <span class="muted">· newest first · Δ is C: free, recorded at fire and at clear</span></h3>
+        <div class="lscroll">${cycles.slice().reverse().map(cycRow).join('')||'<div class="empty">no completed cycles yet</div>'}</div></div>
+      <div class="card" style="margin-bottom:0"><h3>Levers <span class="muted">· what was actually done, and what it measurably returned</span></h3>
+        <div class="lscroll">${levers.slice().reverse().map(levRow).join('')||'<div class="empty">no levers pulled yet — findings so far cleared on their own</div>'}</div></div>
+    </div>
+    <div class="card" style="margin-top:12px;margin-bottom:0"><div class="note" style="margin-top:0">
+      Append-only record at <b>history/outcomes.jsonl</b>. A cleanup that returned <b>0.00 GB</b> is
+      recorded as returning nothing, next to the one that returned 2.3 GB — the record is only worth
+      quoting because it cannot flatter. When a finding fires again, DIAG cites this ledger:
+      <i>"last time this fired, it cleared after…"</i> — what worked on <b>this machine</b>, which is
+      the sentence no tool without a per-machine history can say.</div></div>`;
+  $('#ledRe').onclick=()=>RENDER.led();
+};
 
 /* ================= TIME: clock, stopwatch, and a stopwatch that REMEMBERS =================
  * The owner's ask: a digital clock in the header, an analog one built from the same concentric arcs
@@ -4535,6 +4737,15 @@ setInterval(()=>{
   WD.ring=__VB.rings; WD.field=__VB.field;
   const el=document.getElementById('syDe');
   if(el) el.textContent=String(__VB.ringErrs+__VB.fldErrs)+(WD.re?' · rearmed ×'+WD.re:'');
+  /* A1 bad-boot heal (2026-07-31): a page that booted while the window reported ~0x0 latched a
+     2px backing store. The per-frame size() belt only runs on DRAWN frames, so a loop that is
+     skipping (hidden, docked, fps 0) never heals it. Repair, then SAY SO — same rule as the
+     blank-core guard below. Runs before the hidden check on purpose: painting works while
+     hidden, and healing there means the reveal shows a real frame instead of a black one. */
+  try{
+    if(window.__vitalsFieldHeal&&__vitalsFieldHeal())
+      sysPush('warn','draw',`field backing store was degenerate — healed to ${innerWidth}x${innerHeight}`);
+  }catch{}
   if(document.hidden) return;                    // rAF is legitimately paused — not a stall
   if(rDead||fDead){
     WD.re++;

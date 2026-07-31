@@ -1402,11 +1402,20 @@ function toggleTask(name, enable, cb) {
  * refreshed at most every 10 min — it is file I/O over MFT snapshots that change only when the
  * user scans, so per-call recomputation was cost with no new information. */
 let cachedGrowth = null, growthAt = 0;
+/* B3 (2026-07-31): the disk-free trend for the predictive rule. Cached on the same 10 min clock
+ * as growth and for the same reason - it is file I/O over the rollup day-files, and free space
+ * does not develop a new multi-day trend between two 30 s diagnosis passes. */
+let cachedTrend = null, trendAt = 0;
 function currentDiagnosis() {
   if (Date.now() - growthAt > 600000) {
     growthAt = Date.now();
     const snaps = hist.snapshots();
     cachedGrowth = snaps.length >= 2 ? hist.growth(snaps[0].file, snaps[snaps.length - 1].file) : null;
+  }
+  if (Date.now() - trendAt > 600000) {
+    trendAt = Date.now();
+    try { cachedTrend = { diskFree: hist.trend('diskFreeGB', 14) }; }
+    catch (e) { cachedTrend = null; console.error('[trend]', e.message); }
   }
   /* Maintenance signals refresh on their own slow clock (10 min). They are registry reads, a shell
      namespace walk and a scheduled-task lookup - cheap, but none of them can change second to second,
@@ -1420,7 +1429,7 @@ function currentDiagnosis() {
     maintAt = Date.now();
     ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; });
   }
-  const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint });
+  const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint, trend: cachedTrend });
   outcomes.observe(d, latest);
   return d;
 }

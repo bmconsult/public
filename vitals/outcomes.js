@@ -25,7 +25,13 @@ const path = require('path');
  * `disk_low`, disk_low vanishes from the findings list — but the condition did not clear, it got
  * WORSE. Without this map the ledger would record a lie ("disk_low cleared") at the exact moment
  * the machine deteriorated. */
-const SUPPRESSORS = { disk_low: ['spiral'], ram_tight: ['spiral'] };
+const SUPPRESSORS = {
+  disk_low: ['spiral'], ram_tight: ['spiral'],
+  /* B3: the prediction stops firing at the exact moment the wall arrives (its gate is pct < 90,
+   * disk_low's trigger). Recording that as "cleared" would be the same lie in the other
+   * direction - the forecast did not clear, it CAME TRUE. Absorbed, not cleared. */
+  disk_fill_ahead: ['disk_low', 'spiral'],
+};
 
 class Outcomes {
   constructor(dir) {
