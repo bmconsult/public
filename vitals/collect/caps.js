@@ -166,8 +166,15 @@ const PLATFORMS = {
     verified: false,
     verifyNote: 'UNVERIFIED on hardware - written from documented tool output, never executed on a ' +
                 'Mac. The collector LOGIC is covered by 64 simulation checks (collect/test-darwin-sim.js), ' +
-                'but whether macOS really emits the assumed formats is untested. Run ' +
-                'collect/test-darwin-live.js and compare against Activity Monitor.',
+                'but whether macOS really emits the assumed formats is untested. CI now runs the live ' +
+                'suite on real Darwin (macos-14 + macos-15) on every push; this note and the flags ' +
+                'below change when it goes green, and not before.',
+    /* IMPLEMENTED BUT NOT YET FLIPPED. cpu.perCore is written and works - os.cpus() carries
+       per-core tick counters on Darwin, so it never needed the native addon the collector's own
+       comment claimed - but a flag here means "verified on this platform", not "the code exists".
+       It flips when the CI live suite reports per-core values that agree with an independent
+       source, which is the same standard every other true in this file was held to. Writing the
+       code and flipping the flag are deliberately two separate acts. */
     caps: {
       /* Corrected 2026-07-30 to match the CODE rather than the intent. Each false below was
          previously true or partial while the implementation emitted nothing, emitted null, or did

@@ -1,0 +1,131 @@
+# VITALS - run the macOS collector on real Darwin.
+#
+# WHY THIS FILE EXISTS. Every macOS line in this project was written from documented tool output by
+# someone who does not own a Mac. The simulated suite proves the collector's LOGIC given assumed
+# input; it cannot prove macOS actually emits what was assumed. That gap was declared in the
+# capability manifest rather than hidden, and this workflow is how it closes.
+#
+# GitHub's macOS runners are real Apple Silicon machines with passwordless sudo, free for public
+# repositories. That makes this a better verification regime than owning one Mac: it re-proves the
+# port on every push, on two macOS versions at once, and banks fresh real fixtures each run.
+#
+# WHAT A FAILURE HERE MEANS. On the first runs, failures are the POINT - each one is a real finding
+# about a command whose output we guessed wrong. Steps therefore run to completion rather than
+# stopping at the first failure, so one run yields every finding instead of the first one.
+#
+# WHAT THIS CANNOT SEE. Runners are virtual machines: no battery, a paravirtual GPU, no real
+# thermals. Those paths get their fixtures from a human's Mac via tools/capture-macos-fixtures.sh.
+# A green run here is not permission to flip a capability flag that only a populated sensor proves.
+
+name: vitals · macOS
+
+on:
+  push:
+    paths: ['vitals/**', '.github/workflows/vitals-macos.yml']
+  pull_request:
+    paths: ['vitals/**']
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: vitals
+
+jobs:
+  darwin:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false          # one architecture failing must not hide the other's result
+      matrix:
+        os: [macos-14, macos-15]
+        node: ['20']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: What machine is this
+        run: |
+          echo "arch:    $(uname -m)"
+          echo "os:      $(sw_vers -productVersion)"
+          echo "cpu:     $(sysctl -n machdep.cpu.brand_string)"
+          echo "cores:   $(sysctl -n hw.ncpu)"
+          echo "memory:  $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          echo "node:    $(node --version)"
+
+      # Capture BEFORE testing. Even when the suites fail, the run has produced real Darwin output
+      # for every command the collector uses - which is the artifact that lets the fix be written
+      # against reality instead of against another assumption.
+      - name: Capture real fixtures
+        if: always()
+        run: bash tools/capture-macos-fixtures.sh
+
+      - name: Upload fixtures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-fixtures-${{ matrix.os }}
+          path: vitals/macos-fixtures.txt
+          if-no-files-found: warn
+
+      - name: Parser fixtures (logic only - passes on any platform)
+        if: always()
+        run: node collect/test-darwin.js
+
+      - name: Full-collector simulation
+        if: always()
+        run: node collect/test-darwin-sim.js
+
+      # THE ONE THAT MATTERS. Runs the real collector against the real system and cross-checks every
+      # field against an independent authority - sysctl, df, vm_stat, ps - because a collector
+      # agreeing with itself proves nothing.
+      - name: LIVE collector on real Darwin
+        if: always()
+        run: node collect/test-darwin-live.js
+
+      - name: Route guard + capability manifest
+        if: always()
+        run: node test-routes.js
+
+      # Proves the bridge actually starts and serves measured telemetry on macOS, which no unit
+      # test covers: process spawn, the collector's own child processes, and the HTTP surface.
+      - name: Bridge boots and serves a real sample
+        if: always()
+        run: |
+          VITALS_PORT=8790 node bridge.js &
+          BRIDGE=$!
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8790/api/caps >/dev/null && break
+            sleep 0.5
+          done
+          echo "--- /api/caps ---"
+          curl -sf http://127.0.0.1:8790/api/caps | head -c 900 || echo "caps did not answer"
+          echo ""
+          sleep 12
+          echo "--- /api/latest ---"
+          curl -sf http://127.0.0.1:8790/api/latest | head -c 900 || echo "latest did not answer"
+          echo ""
+          node -e '
+            const http = require("http");
+            http.get({host:"127.0.0.1",port:8790,path:"/api/latest"}, r => {
+              let b=""; r.on("data",c=>b+=c); r.on("end",()=>{
+                const l=JSON.parse(b); let bad=0;
+                const need = {"cpu.total": l.cpu && l.cpu.total, "mem.usedMB": l.mem && l.mem.usedMB,
+                              "disk.vols": l.disk && l.disk.vols && l.disk.vols.length,
+                              "proc rows": l.proc && l.proc.length};
+                for (const [k,v] of Object.entries(need)) {
+                  const ok = v !== null && v !== undefined && v !== 0;
+                  console.log((ok?"  ok   ":"  MISS ") + k + " = " + JSON.stringify(v));
+                  if (!ok) bad++;
+                }
+                process.exit(bad ? 1 : 0);
+              });
+            }).on("error", e => { console.error("bridge unreachable: " + e.message); process.exit(1); });
+          '
+          kill $BRIDGE 2>/dev/null || true
+
+      - name: Sudo is available (the elevated paths are testable here)
+        if: always()
+        run: sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: NO"

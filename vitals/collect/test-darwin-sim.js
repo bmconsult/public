@@ -165,7 +165,20 @@ setTimeout(() => {
   console.log(`  total ${t2.cpu.total}%  (fixture: us 9 + sy 6, id 85)`);
   check('cpu.total = 100 - idle', t2.cpu.total === 15, t2.cpu.total);
   check('two-disk column offset handled', t2.cpu.total === 15, 'cpu cols shifted by 6');
-  check('per-core array empty, not faked', Array.isArray(t2.cpu.cores) && t2.cpu.cores.length === 0);
+  /* This used to assert cores.length === 0, which encoded a LIMITATION as a REQUIREMENT: it tested
+     that macOS does not report per-core, so implementing per-core failed the suite. The intent was
+     never "must be empty" - it was "must not be faked from the average", written when the only way
+     to satisfy that was to report nothing.
+     The intent survives, stated properly: cores is either empty (the first tick, where cumulative
+     counters cannot yet be differenced) or genuinely per-core - real readings, not N copies of the
+     total. A test that forbids a capability will pass forever and block the feature silently. */
+  const cores = t2.cpu.cores;
+  check('per-core is an array', Array.isArray(cores));
+  const faked = cores.length > 1 && cores.every((v) => v === cores[0]) && cores[0] === t2.cpu.total;
+  check('per-core not faked from the average', !faked, JSON.stringify(cores));
+  check('per-core values are null or 0-100',
+    cores.every((v) => v === null || (typeof v === 'number' && v >= 0 && v <= 100)),
+    JSON.stringify(cores));
 
   console.log('\n--- memory arithmetic (16k pages) ---');
   /* free 45231 + purgeable 8821 + file-backed 201883 = 255935 pages * 16384 / 1048576 = 3999 MB */

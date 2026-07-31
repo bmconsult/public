@@ -54,6 +54,36 @@ function realSh(cmd, cb) {
  * the fixture and the identical suite becomes verification. See tools/capture-macos-fixtures.sh. */
 let sh = realSh;
 let spawnIostat = () => spawn('iostat', ['-w', '1']);
+
+/* ---------------- per-core CPU ----------------
+ * os.cpus() carries per-core cumulative tick counters on Darwin - libuv fills them from
+ * host_processor_info - so this needs no subprocess and no native addon. Differenced between
+ * ticks, exactly as collect/linux.js differences /proc/stat.
+ *
+ * Two deliberate refusals to guess:
+ *   - The FIRST tick returns [] rather than a reading. The counters are cumulative since boot, so
+ *     a first sample would report the machine's average since power-on as though it were now.
+ *   - A core whose counters did not advance returns null, not 0. No elapsed ticks means the load
+ *     is unknowable for that interval; 0 would claim it was idle. */
+let prevCores = null;
+
+function perCore() {
+  const now = os.cpus().map(({ times: t }) => ({
+    idle: t.idle,
+    total: t.user + t.nice + t.sys + t.idle + t.irq,
+  }));
+  const prev = prevCores;
+  prevCores = now;
+  /* A core-count change mid-run (a VM resizing, a CPU offlined) makes the paired difference
+     meaningless - drop the sample rather than difference mismatched cores against each other. */
+  if (!prev || prev.length !== now.length) return [];
+  return now.map((c, i) => {
+    const dTotal = c.total - prev[i].total;
+    const dIdle = c.idle - prev[i].idle;
+    if (!(dTotal > 0)) return null;
+    return Math.max(0, Math.min(100, Math.round(((dTotal - dIdle) / dTotal) * 100)));
+  });
+}
 function _inject(fakeSh, fakeIostat) { sh = fakeSh || realSh; if (fakeIostat) spawnIostat = fakeIostat; }
 
 /* ---------------- vm_stat ----------------
@@ -306,9 +336,15 @@ function start(root, { onStatic, onTick, onError }) {
         onTick({
           t: 'tick',
           ts: Date.now(),
-          /* No per-core breakdown without a native addon; the ring shows the total and the per-core
-             strip is hidden by caps.js rather than filled with copies of the average. */
-          cpu: { total: cpuPct, cores: [] },
+          /* PER-CORE, and it never needed a native addon.
+             This said "no per-core breakdown without a native addon" while the same file called
+             os.cpus() three times to count cores and never once read .times. Node IS the native
+             addon: libuv implements os.cpus() on Darwin via host_processor_info, so every core's
+             user/nice/sys/idle tick counters are already in this process. Differencing them between
+             ticks is the identical algorithm collect/linux.js runs against /proc/stat.
+             The assumption cost this platform a whole capability. It was never a platform limit -
+             it was a comment nobody re-checked. */
+          cpu: { total: cpuPct, cores: perCore() },
           mem: {
             usedMB, freeMB: totalMB - usedMB, totalMB,
             committedMB: null,

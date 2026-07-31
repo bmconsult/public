@@ -70,6 +70,79 @@ ioreg -rn AppleSmartBattery 2>/dev/null \
   | grep -E '"(CycleCount|DesignCapacity|AppleRawMaxCapacity|AppleRawCurrentCapacity|Voltage|InstantAmperage)"' \
   >> "$OUT" 2>&1 || echo "(no AppleSmartBattery - desktop Mac)"                  >> "$OUT"
 
+# ---------------------------------------------------------------------------------------------
+# EVERYTHING BELOW IS FOR CAPABILITIES NOT YET BUILT.
+#
+# Captured BEFORE the parsers are written, deliberately. The macOS collector was originally coded
+# from documented tool output by someone with no Mac, and every later correction traced back to
+# that. Capturing first inverts it: the parser gets written against real bytes, and a format that
+# surprises us surprises us here rather than in someone's panel.
+# ---------------------------------------------------------------------------------------------
+
+# Per-core CPU. Node's own os.cpus() carries per-core times on Darwin (libuv calls
+# host_processor_info), which is what makes per-core a free win rather than a native addon.
+emit "node os.cpus() [per-core times]"
+if command -v node >/dev/null 2>&1; then
+  node -e 'const c=require("os").cpus();console.log(JSON.stringify({n:c.length,model:c[0]&&c[0].model,times:c.slice(0,4).map(x=>x.times)},null,1))' >> "$OUT" 2>&1
+else
+  echo "(node not installed - skipped)" >> "$OUT"
+fi
+
+# P-cores vs E-cores. Apple Silicon only; a Mac that reports both is a machine where "CPU at 40%"
+# means something different depending on which cluster is busy.
+emit "sysctl perflevels (P/E cores)"
+sysctl -a 2>/dev/null | grep -E 'hw\.perflevel[0-9]+\.(name|physicalcpu|logicalcpu)|hw\.optional\.arm64' >> "$OUT" 2>&1 || echo "(none - Intel Mac)" >> "$OUT"
+
+# GPU utilisation without root. The key names here decide whether gpu.total is reachable at all.
+emit "ioreg IOAccelerator PerformanceStatistics"
+ioreg -rc IOAccelerator -a 2>/dev/null | head -c 6000 >> "$OUT" 2>&1 || echo "(none)" >> "$OUT"
+
+emit "system_profiler SPDisplaysDataType"
+system_profiler SPDisplaysDataType -json 2>/dev/null | head -c 2500 >> "$OUT" 2>&1 || echo "(none)" >> "$OUT"
+
+# Disk read/write split, one level upstream of iostat (which only gives combined throughput).
+emit "ioreg IOBlockStorageDriver Statistics"
+ioreg -rc IOBlockStorageDriver -a 2>/dev/null | head -c 6000 >> "$OUT" 2>&1 || echo "(none)" >> "$OUT"
+
+# THE "BEYOND" ONE. Which process is holding this machine awake, by name, with no admin rights.
+# Windows needs an elevated powercfg /requests for the same answer.
+emit "pmset -g assertions"
+pmset -g assertions 2>&1 | head -60 >> "$OUT" 2>&1
+
+# Thermal pressure without root. Not degrees - the throttling verdict, which is the actionable half.
+emit "pmset -g therm";              pmset -g therm 2>&1                         >> "$OUT" 2>&1
+
+# Apple's own memory verdict. More honest than "% used", which VITALS already argues about.
+emit "memory_pressure / pressure level"
+memory_pressure 2>/dev/null | head -20 >> "$OUT" 2>&1 || echo "(memory_pressure unavailable)" >> "$OUT"
+sysctl kern.memorystatus_vm_pressure_level vm.swapusage 2>&1 >> "$OUT"
+
+# Per-process faults, page-ins and energy impact. Column layout is what matters here.
+emit "top -l 2 -stats pid,command,cpu,mem,faults,pageins,power (2nd sample, first 20)"
+top -l 2 -n 20 -stats pid,command,cpu,mem,faults,pageins,power 2>&1 | tail -40 >> "$OUT" 2>&1
+
+# Sockets WITH owning pid, unprivileged. lsof -i shows only your own processes without root; this
+# reads via sysctl and sees everything.
+emit "netstat -anv (first 25, listening + established)"
+if [ "$REDACT" = "1" ]; then
+  netstat -anv 2>&1 | head -25 | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' >> "$OUT" 2>&1
+else
+  netstat -anv 2>&1 | head -25 >> "$OUT" 2>&1
+fi
+
+# Startup items. plutil converts Apple's binary plists to JSON with no parser to write.
+emit "launchctl list (first 20)"; launchctl list 2>&1 | head -20               >> "$OUT" 2>&1
+emit "LaunchAgents present"
+ls -1 ~/Library/LaunchAgents /Library/LaunchAgents /Library/LaunchDaemons 2>/dev/null | head -30 >> "$OUT" 2>&1 || true
+emit "plutil on one LaunchAgent (shape only)"
+_first=$(ls -1 /Library/LaunchDaemons/*.plist 2>/dev/null | head -1)
+if [ -n "${_first:-}" ]; then plutil -convert json -o - "$_first" 2>&1 | head -c 900 >> "$OUT" 2>&1
+else echo "(no LaunchDaemons readable)" >> "$OUT"; fi
+
+# Spotlight: the MFT-killer. If indexing is on, "largest files" and "what changed" are index reads.
+emit "mdutil -s / (is Spotlight indexing on?)"
+mdutil -s / 2>&1                                                                >> "$OUT" 2>&1
+
 echo ""
 echo "Captured to: $OUT"
 echo "Size: $(wc -c < "$OUT") bytes"
