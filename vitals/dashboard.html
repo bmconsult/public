@@ -1735,8 +1735,16 @@ const RINGS=[
      device it names, so the ring reads the BUSIEST adapter from the vendor-agnostic GPU Engine
      counters (Task Manager's source) — the label says so, and THERM carries the full split.
      Fallback to nvidia-smi only if the engine counters ever go away. */
+  /* NULL, NOT 0, when this host cannot measure a GPU at all.
+     Caught in the first screenshot of the panel running on a Mac: a CI runner's paravirtual GPU
+     publishes no utilisation key, caps.js correctly said gpu.total:false, the collector correctly
+     sent null - and this readout printed "0 GPU" anyway. A plausible zero ending the question is
+     the exact failure the whole capability manifest exists to prevent, and it was the FIRST thing
+     a macOS user would have seen.
+     The stat card at CM[] already returned an em-dash for the same datum, so the two views of one
+     number disagreed - which is worse than either being wrong alone. */
   {k:'gpu', label:'GPU · BUSIEST ADAPTER', tag:'GPU', color:'--cv-gpu', go:'therm',hk:'gpu',
-   get:t=>t&&t.gpus?t.gpus.max:(t&&t.gpu?t.gpu.util:0)},
+   get:t=>(t&&t.gpus)?t.gpus.max:((t&&t.gpu&&t.gpu.util!=null)?t.gpu.util:null)},
 ];
 const A0R=-Math.PI*0.75, SPANR=Math.PI*1.5;
 (function(){
@@ -1807,10 +1815,14 @@ const A0R=-Math.PI*0.75, SPANR=Math.PI*1.5;
         }
       }
       // radial readout in the arcs' open mouth (true negative space at 180°)
-      const val=Math.round(clamp(ring.get(S.tick)||0,0,100));
+      /* `||0` here turned "this host cannot measure that" into a confident 0 - the readout printed
+         "0 GPU" on a Mac whose GPU publishes no utilisation at all. Null has to survive as a dash
+         all the way to the glyph, or the manifest gating upstream buys nothing. */
+      const raw=ring.get(S.tick);
+      const val=raw==null?null:Math.round(clamp(raw,0,100));
       bx.textAlign='center'; bx.textBaseline='alphabetic';
-      bx.fillStyle=hexA(col,.92); bx.font='600 12px ui-sans-serif,system-ui';
-      bx.fillText(S.tick?String(val):'–', g.cxp-rr, g.cyp-1);
+      bx.fillStyle=hexA(col,val==null?.42:.92); bx.font='600 12px ui-sans-serif,system-ui';
+      bx.fillText(!S.tick||val==null?'–':String(val), g.cxp-rr, g.cyp-1);
       bx.fillStyle=css('--cv-label'); bx.font='600 7px ui-sans-serif,system-ui';
       bx.fillText(ring.tag, g.cxp-rr, g.cyp+9);
     });
@@ -1889,10 +1901,14 @@ const A0R=-Math.PI*0.75, SPANR=Math.PI*1.5;
       cx.beginPath(); cx.moveTo(g.cxp+cA*(rr-lw*0.45),g.cyp+sA*(rr-lw*0.45));
       cx.lineTo(g.cxp+cA*(rr+lw*0.45),g.cyp+sA*(rr+lw*0.45)); cx.stroke();
     });
-    const idx=hover>=0?hover:0, cur=clamp(RINGS[idx].get(S.tick)||0,0,100);
+    /* Same rule as the gap readouts. Hovering an unmeasurable ring must not put a confident 0 in
+       the hero position - the easing keeps tracking underneath so the animation stays sane, but
+       what gets drawn is a dash. */
+    const idx=hover>=0?hover:0, rawCur=RINGS[idx].get(S.tick);
+    const cur=clamp(rawCur==null?0:rawCur,0,100);
     const big=E('big',cur,.12);
     if(Math.abs(big-cur)>0.25) settled=false;
-    $('#cvBig').textContent=Math.round(big);
+    $('#cvBig').textContent=rawCur==null?'–':Math.round(big);
     if(hover<0) $('#cvSub').textContent=RINGS[0].label;
     return settled;
   }

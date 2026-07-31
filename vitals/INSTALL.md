@@ -1,8 +1,9 @@
 # Installing VITALS
 
 **Version 0.9.0.** Pre-1.0 on purpose: Windows is complete and measured, Linux is verified end to
-end, macOS is written but has never run on real hardware, and the action layer (kill, clean, restart,
-dials) is Windows-only. Those four facts are what 1.0 would have to close.
+end, macOS runs green in CI on real Apple Silicon but still awaits a physical Mac for its battery,
+GPU and thermal paths (`FINISH_ON_A_MAC.md` is that process, one command), and the action layer
+(kill, clean, restart, dials) is Windows-only. Those four facts are what 1.0 would have to close.
 
 
 VITALS is a system monitor that measures the machine it runs on and explains what it finds. It is a
