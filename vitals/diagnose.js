@@ -1,0 +1,414 @@
+/* VITALS - a system monitor that measures the machine it runs on and explains what it finds.
+ * Copyright 2026 Ben M
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* VITALS — causal diagnosis engine.
+ *
+ * The gap this fills: every monitor shows you forty numbers and leaves the synthesis to you.
+ * Knowing RAM is at 78% is not knowing why the machine feels slow. This produces ranked, evidenced
+ * statements of CAUSE, in the order they're worth acting on.
+ *
+ * Three design rules, all of which exist to stop it from crying wolf:
+ *
+ *  1. NOTHING FIRES ON AN INSTANT. Every rule tests a SUSTAINED condition against the history ring.
+ *     A 100% CPU spike is a process starting; 100% for ninety seconds is a problem. Rules that
+ *     can't meet their window return nothing rather than guessing.
+ *  2. COMPOUND RULES OUTRANK THEIR PARTS. "Disk is full" and "RAM is tight" are two findings.
+ *     "The disk is full BECAUSE the pagefile grew BECAUSE RAM is exhausted" is one finding that
+ *     explains both, and it suppresses them.
+ *  3. EVERY FINDING CARRIES ITS EVIDENCE. Measured numbers, not adjectives — so a wrong call is
+ *     visibly wrong instead of merely unconvincing.
+ */
+
+const S = { CRIT: 3, WARN: 2, INFO: 1 };
+const NAME = { 3: 'critical', 2: 'warning', 1: 'note' };
+
+function gb(mb) { return +(mb / 1024).toFixed(1); }
+
+/* Compact surfaces get a SHORT form (2026-07-30). The overview tile and the docked sidebar have one
+ * line each; the full sentence earns its elaboration on the DIAG page, where there is room for it.
+ * Owner: "the disk is full because your ram is exhausted - the two are feeding each other. have it just
+ * say the disk is full because your ram is exhausted."
+ * Derived from the title rather than authored per rule, so a new finding cannot forget to carry one -
+ * every title here is written as CLAIM then separator then elaboration, and the elaboration is exactly
+ * what should go first when space runs out. */
+function shortTitle(t) {
+  const cut = String(t).split(' — ')[0].split(' · ')[0].trim();
+  return cut.length >= 12 ? cut : String(t);   // never truncate into something meaningless
+}
+
+/* ---------- the feedback sentence (outcomes ledger → prose) ----------
+ * When a finding fires AGAIN, the ledger knows what happened last time: how long it lasted, which
+ * levers were pulled while it was open, what the metrics did, and how long the machine then
+ * stayed clear. Composing that here (not in the UI) keeps the same rule as `chain`: the sentence
+ * is built from the engine's own recorded values, so it can never disagree with the ledger. */
+function pastText(p) {
+  const ago = (t) => { const h = (Date.now() - t) / 3600000; return h < 1 ? Math.round(h * 60) + ' min' : h < 48 ? h.toFixed(1) + ' h' : (h / 24).toFixed(1) + ' days'; };
+  const dur = (s) => s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h';
+  const levers = (p.levers || []).map((l) =>
+    l.kind === 'clean' ? `cleaning ${l.detail.key} returned ${l.detail.freedGB} GB`
+    : l.kind === 'kill' ? `you killed ${(l.detail.pids || []).length} process${(l.detail.pids || []).length === 1 ? '' : 'es'}${l.detail.name ? ' (' + l.detail.name + ')' : ''}`
+    : l.kind === 'task' ? `you ${l.detail.enable ? 'enabled' : 'disabled'} task ${l.detail.name}`
+    : l.kind).join('; ');
+  let t = `Last time this fired (${ago(p.firedAt)} ago) it cleared after ${dur(p.durSec)}`;
+  if (levers) t += ` — during it ${levers}`;
+  const dFree = p.m1 && p.m0 && typeof p.m1.freeGB === 'number' && typeof p.m0.freeGB === 'number' ? +(p.m1.freeGB - p.m0.freeGB).toFixed(1) : null;
+  if (dFree !== null && Math.abs(dFree) >= 0.5) t += `; C: free moved ${dFree > 0 ? '+' : ''}${dFree} GB`;
+  t += `. It then stayed clear for ${ago(p.clearedAt)}.`;
+  return t;
+}
+
+/**
+ * @param tick   latest metrics sample
+ * @param hist   History instance
+ * @param extra  { growth?, snapshot?, startupCount? }
+ */
+function diagnose(tick, hist, extra = {}) {
+  if (!tick) return { findings: [], summary: 'waiting for data', ready: false };
+
+  const f = [];
+  const vol = tick.disk.vols.find((v) => v.id === 'C:') || { pct: 0, freeGB: 0, sizeGB: 1 };
+  const totalRamMB = tick.mem.totalMB;
+  const suppress = new Set();
+
+  const add = (o) => {
+    // Attach this-machine history from the outcomes ledger, if the bridge passed one in.
+    if (extra.outcomes) {
+      try { const p = extra.outcomes.pastFor(o.id); if (p) o.past = { ...p, text: pastText(p) }; } catch {}
+    }
+    f.push(o);
+  };
+
+  /* ---------- 1. the compound spiral (the whole point of this engine) ---------- */
+  const diskTight = vol.pct >= 90;
+  const ramTight = hist.sustained('mem', (v) => v >= 80, 120, 0.7);
+  const faulting = hist.sustained('hardFaults', (v) => v >= 80, 120, 0.4);
+  // pagefile is inferred: committed well above installed means Windows is leaning on disk
+  const overCommit = tick.mem.committedMB > totalRamMB * 1.2;
+
+  if (diskTight && (ramTight || overCommit)) {
+    suppress.add('disk_low'); suppress.add('ram_tight');
+    add({
+      id: 'spiral', sev: S.CRIT,
+      title: `Your disk is full because your RAM is exhausted — the two are feeding each other`,
+      because:
+        `RAM sits at ${tick.mem.pct}% with ${gb(tick.mem.committedMB)} GB committed against ` +
+        `${gb(totalRamMB)} GB installed, so Windows has grown the pagefile to absorb the overflow. ` +
+        `That pagefile is consuming the disk that is already at ${vol.pct}% — and a drive this full ` +
+        `has no spare blocks left for wear-levelling, so every write it serves is slower than rated. ` +
+        `Freeing disk unwinds it from both ends at once.`,
+      evidence: [
+        `C: ${vol.freeGB} GB free of ${vol.sizeGB} GB (${(100 - vol.pct).toFixed(1)}% free)`,
+        `RAM ${tick.mem.pct}% used, sustained (${ramTight ? Math.round(ramTight.frac * 100) + '% of last 2 min' : 'commit-based'})`,
+        `Committed ${gb(tick.mem.committedMB)} GB vs ${gb(totalRamMB)} GB installed`,
+        faulting ? `Hard faults averaging ${hist.stat('hardFaults', 120).avg}/s — actively paging to disk` : `Hard faults low right now`,
+      ],
+      action: 'Free disk first (Reclaim tab), then cap the pagefile. Do not cap it while space is scarce.',
+      confidence: faulting ? 'high' : 'medium',
+      /* The mechanism as STRUCTURE, not only prose — the UI renders this as the causal chain.
+       * Every value here is the same measurement quoted in the evidence; nothing is derived
+       * client-side from text, so the chain can never disagree with the finding. `loop` marks
+       * that the last node feeds the first (the spiral). */
+      chain: {
+        loop: true,
+        steps: [
+          { v: `${tick.mem.pct}%`,               l: 'RAM used' },
+          { v: `${gb(tick.mem.committedMB)} GB`, l: `committed of ${gb(totalRamMB)}` },
+          { v: `${(100 - vol.pct).toFixed(1)}%`, l: 'C: free' },
+          { v: faulting ? `${hist.stat('hardFaults', 120).avg}/s` : `${tick.mem.pagesSec ?? 0}/s`, l: 'hard faults' },
+        ],
+      },
+    });
+  }
+
+  /* ---------- 2. individual resource pressure ---------- */
+  if (!suppress.has('disk_low') && vol.pct >= 90) {
+    add({
+      id: 'disk_low', sev: vol.pct >= 95 ? S.CRIT : S.WARN,
+      title: `C: is ${(100 - vol.pct).toFixed(1)}% free — below the threshold where SSDs slow down`,
+      because: `Below ~10% free an SSD runs out of spare blocks for wear-levelling and garbage ` +
+               `collection; sustained write throughput can fall by more than half. Fully reversible.`,
+      evidence: [`${vol.freeGB} GB free of ${vol.sizeGB} GB`],
+      action: 'Reclaim tab → clear Tier 1. Then archive the large directories under Growth.',
+      confidence: 'high',
+    });
+  }
+
+  if (!suppress.has('ram_tight')) {
+    const r = hist.sustained('mem', (v) => v >= 85, 180, 0.7);
+    if (r) add({
+      id: 'ram_tight', sev: S.WARN,
+      title: `Memory has been above 85% for ${Math.round(r.samples / 60)} of the last 3 minutes`,
+      because: `Once physical RAM is exhausted Windows pages to disk. The percentage itself is not ` +
+               `the problem — the hard-fault rate below is what you actually feel.`,
+      evidence: [`${tick.mem.pct}% used, ${gb(tick.mem.freeMB)} GB available`,
+                 `${Math.round(r.frac * 100)}% of samples above threshold`],
+      action: 'Close what you are not using, or check the memory hogs below.',
+      confidence: 'high',
+    });
+  }
+
+  const hf = hist.sustained('hardFaults', (v) => v >= 150, 90, 0.4);
+  if (hf) {
+    const st = hist.stat('hardFaults', 90);
+    add({
+      id: 'thrash', sev: S.CRIT,
+      title: `Actively thrashing the pagefile — ${st.avg} hard faults/sec average`,
+      because: `A hard fault is Windows fetching a memory page back from disk because it wasn't in ` +
+               `RAM. This is the single most direct measure of "out of memory", and unlike the RAM ` +
+               `percentage it correlates with what you perceive as stalling.`,
+      evidence: [`avg ${st.avg}/s, peak ${st.max}/s over ${st.n}s`,
+                 `RAM ${tick.mem.pct}%, disk queue ${tick.disk.io.queue}`],
+      action: 'Free RAM now. This is costing you real time on every operation.',
+      confidence: 'high',
+    });
+  }
+
+  /* ---------- 3. I/O attribution — who is causing the congestion ---------- */
+  const q = hist.sustained('diskQueue', (v) => v >= 2, 60, 0.5);
+  if (q) {
+    const hogs = [...(tick.proc || [])]
+      .map((p) => ({ ...p, io: (p.rMBs || 0) + (p.wMBs || 0) }))
+      .filter((p) => p.io > 0.5).sort((a, b) => b.io - a.io).slice(0, 3);
+    add({
+      id: 'io_congestion', sev: S.WARN,
+      title: hogs.length
+        ? `Disk is congested and ${hogs[0].n} is the main cause (${hogs[0].io.toFixed(1)} MB/s)`
+        : `Disk queue has been backed up for a minute`,
+      because: `Queue depth is how many requests are waiting on the drive. Sustained above ~2 per ` +
+               `physical disk means every app on the machine is waiting, which is felt as stutter ` +
+               `rather than slowness.`,
+      evidence: [
+        `queue ${tick.disk.io.queue}, active ${tick.disk.io.busyPct}%`,
+        ...hogs.map((h) => `${h.n}: read ${h.rMBs} MB/s, write ${h.wMBs} MB/s`),
+      ],
+      action: hogs.length ? `If ${hogs[0].n} is a background task, pause it.` : 'Identify the writer in the Processes view.',
+      confidence: hogs.length ? 'high' : 'medium',
+    });
+  }
+
+  /* ---------- 4. CPU shape, not just CPU level ---------- */
+  const oneCore = hist.sustained('cpuMax', (v) => v >= 92, 90, 0.7);
+  const totalLow = hist.sustained('cpu', (v) => v <= 45, 90, 0.7);
+  if (oneCore && totalLow) {
+    add({
+      id: 'single_thread', sev: S.INFO,
+      title: 'A single-threaded bottleneck — one core pinned while the rest idle',
+      because: `One logical thread has been saturated while total CPU stayed low. Whatever is ` +
+               `running cannot use more cores, so a faster CPU would help and more cores would not.`,
+      evidence: [`peak core ${hist.stat('cpuMax', 90).avg}% avg`, `total CPU ${hist.stat('cpu', 90).avg}% avg`],
+      action: 'Informational. Relevant when choosing hardware or parallelising a workload.',
+      confidence: 'medium',
+    });
+  }
+
+  const cpuHog = (tick.proc || []).filter((p) => p.cpu >= 40).sort((a, b) => b.cpu - a.cpu)[0];
+  if (cpuHog && hist.sustained('cpu', (v) => v >= 60, 120, 0.6)) {
+    add({
+      id: 'cpu_hog', sev: S.INFO,
+      title: `${cpuHog.n} is holding ${cpuHog.cpu}% of CPU`,
+      because: `Sustained across the last two minutes, so not a startup spike.`,
+      evidence: [`${cpuHog.n} — ${cpuHog.cpu}% CPU, ${cpuHog.count} instance(s), ${cpuHog.mb} MB`],
+      action: 'Expected for a build or render. Unexpected otherwise.',
+      confidence: 'medium',
+    });
+  }
+
+  /* ---------- 5. memory hogs, proportional to what you have ---------- */
+  const memHog = (tick.proc || []).filter((p) => p.mb > totalRamMB * 0.15).sort((a, b) => b.mb - a.mb)[0];
+  if (memHog) {
+    add({
+      id: 'mem_hog', sev: tick.mem.pct > 85 ? S.WARN : S.INFO,
+      title: `${memHog.n} is holding ${gb(memHog.mb)} GB — ${Math.round((memHog.mb / totalRamMB) * 100)}% of your RAM`,
+      because: `Across ${memHog.count} process${memHog.count > 1 ? 'es' : ''}.`,
+      evidence: [`${memHog.mb} MB of ${totalRamMB} MB installed`],
+      action: tick.mem.pct > 85 ? 'Restarting it would return the most memory of anything running.' : 'Fine while RAM is comfortable.',
+      /* The finding already named the app to restart; without a lever the reader has to go find it
+         in a process table and do it by hand. Offered only while RAM is actually tight - a restart
+         button on a healthy machine is an invitation to break something for no reason. */
+      lever: tick.mem.pct > 85 ? { kind: 'restart-app', name: memHog.n, mb: memHog.mb } : null,
+      confidence: 'high',
+    });
+  }
+
+  /* ---------- 6. thermal ---------- */
+  if (tick.gpu && tick.gpu.temp >= 84) {
+    add({
+      id: 'gpu_hot', sev: tick.gpu.temp >= 90 ? S.WARN : S.INFO,
+      title: `GPU at ${tick.gpu.temp} °C`,
+      because: `Sustained high temperature causes clock throttling — the card quietly gets slower ` +
+               `rather than failing, so it shows up as reduced performance, not an error.`,
+      evidence: [`${tick.gpu.temp} °C at ${tick.gpu.util}% utilisation, ${tick.gpu.watts} W`],
+      action: 'Check airflow and vents if this persists at idle.',
+      confidence: 'high',
+    });
+  }
+
+  /* ---------- 6b. battery (2026-07-29) — state, not speculation ----------
+   * Two separately measurable facts, reported separately:
+   *   worn pack: FullChargeCapacity vs DesignCapacity from ACPI — a hardware fact.
+   *   stuck low on AC: charge <=10% while on mains and the firmware reports no charge flow.
+   *     Software cannot distinguish a charge-limit setting from a dead pack, so the finding
+   *     says exactly that instead of guessing. */
+  if (tick.pwr && tick.pwr.bat && tick.pwr.designWh && tick.pwr.fullWh) {
+    const healthPct = Math.round((tick.pwr.fullWh / tick.pwr.designWh) * 100);
+    if (healthPct < 50) {
+      add({
+        id: 'battery_worn', sev: S.INFO,
+        title: `Battery holds ${healthPct}% of its design capacity`,
+        because: `The pack was built for ${tick.pwr.designWh} Wh and now fully charges to ` +
+                 `${tick.pwr.fullWh} Wh after ${tick.pwr.cycles || '?'} charge cycles. ` +
+                 `This is chemistry ageing, not a fault — but runtime estimates scale with it.`,
+        evidence: [`${tick.pwr.fullWh} Wh full-charge vs ${tick.pwr.designWh} Wh design · ${tick.pwr.cycles || '?'} cycles (ACPI + powercfg)`],
+        action: 'THERM page → Capacity history shows the full decline curve.',
+        confidence: 'high',
+      });
+    }
+    if (tick.pwr.ac && !tick.pwr.charging && tick.pwr.pct !== 255 && tick.pwr.pct <= 10) {
+      add({
+        id: 'battery_stuck', sev: S.WARN,
+        title: `Battery at ${tick.pwr.pct}% on AC power and not charging`,
+        because: `The firmware reports zero charge flow while plugged in. That is either a ` +
+                 `vendor charge-limit/protection mode or a pack that can no longer accept charge — ` +
+                 `Windows cannot tell which from software, so this finding won't guess.`,
+        evidence: [`${tick.pwr.pct}% · on AC · charging=false · flow ${tick.pwr.rateW ?? '?'} W (ACPI)`],
+        action: 'Check the vendor battery utility (e.g. MyASUS "Battery Health Charging") before suspecting the pack.',
+        confidence: 'high',
+      });
+    }
+  }
+
+  /* ---------- 6c. MAINTENANCE REMEDIES (2026-07-29) ----------
+   * The owner's question, verbatim: "will it notify when something [needs] restarting computer or a
+   * certain app or other things like recycle bin, defrag if thats still a thing". These are the
+   * remedy-shaped findings. Every one fires on a signal WINDOWS ITSELF maintains, never on a guess,
+   * and each carries a machine-readable `lever` so the UI can offer the remedy as a button instead
+   * of describing it in prose.
+   *
+   * Reboot is deliberately STRICT. Windows sets four flags people commonly treat as
+   * "restart required" and two of them are present benignly on healthy machines - measured on this
+   * one: `WindowsUpdate\Services\Pending` was set and `PendingFileRenameOperations` absent while
+   * NEITHER strong flag was, i.e. no restart was actually pending. Firing on the weak flags is
+   * exactly the crying-wolf failure rule 1 exists to prevent, so they ride along as evidence and can
+   * never trigger on their own. */
+  const mt = extra.maint;
+  if (mt) {
+    const strong = [];
+    if (mt.reboot && mt.reboot.cbs) strong.push('Component Based Servicing: RebootPending');
+    if (mt.reboot && mt.reboot.wuau) strong.push('Windows Update: RebootRequired');
+    const weak = [];
+    if (mt.reboot && mt.reboot.wupend) weak.push('WindowsUpdate\\Services\\Pending (weak, often stale)');
+    if (mt.reboot && mt.reboot.fileRename) weak.push('PendingFileRenameOperations (weak, common when healthy)');
+    const upTxt = mt.uptimeH >= 48 ? `${(mt.uptimeH / 24).toFixed(1)} days` : `${mt.uptimeH} h`;
+
+    if (strong.length) {
+      add({
+        id: 'reboot_pending', sev: mt.uptimeH >= 72 ? S.WARN : S.INFO,
+        title: 'Windows is holding a restart to finish installing updates',
+        because: `Servicing has staged files it cannot swap while they are in use. Until the restart ` +
+                 `happens the update is half-applied: the component store keeps both copies, which is ` +
+                 `also why dismhost and wimserv churn the disk in the background.`,
+        evidence: [...strong, ...weak, `up ${upTxt}`],
+        action: 'Restart when convenient. Nothing else clears this.',
+        lever: { kind: 'reboot' },
+        confidence: 'high',
+      });
+    } else if (mt.uptimeH >= 14 * 24) {
+      add({
+        id: 'uptime_long', sev: S.INFO,
+        title: `Up ${upTxt} without a restart`,
+        because: `Not a fault on its own, and long uptime is not a problem to be solved. It is only ` +
+                 `worth saying because a restart is the cheapest way to clear accumulated driver and ` +
+                 `service state and to apply anything already staged.`,
+        evidence: [`last boot ${upTxt} ago`, ...(weak.length ? weak : ['no restart-required flag set'])],
+        action: 'Optional. Restart next time it is convenient.',
+        lever: { kind: 'reboot' },
+        confidence: 'high',
+      });
+    }
+
+    /* Recycle Bin: reported, never emptied from here. The owner asked for exactly this style to be
+     * kept - surface it with the reasoning and let Explorer own the destructive click. */
+    if (typeof mt.recycleGB === 'number' && mt.recycleGB >= 1 && vol.pct >= 88) {
+      add({
+        id: 'recycle_full', sev: vol.pct >= 95 ? S.WARN : S.INFO,
+        title: `${mt.recycleGB} GB is sitting in the Recycle Bin while C: is ${(100 - vol.pct).toFixed(1)}% free`,
+        because: `Deleted files still occupy their blocks until the bin is emptied, so this space is ` +
+                 `already yours - it is just not free yet. Cheapest reclaim available, and the only ` +
+                 `one that needs no judgement about what the files are for.`,
+        evidence: [`${mt.recycleGB} GB across ${mt.recycleItems} item(s)`, `${vol.freeGB} GB free of ${vol.sizeGB} GB`],
+        action: 'Open the bin, look at what is in it, then empty it yourself. This tool deliberately ' +
+                'has no button for it: permanently destroying files belongs behind Explorer own confirmation.',
+        lever: { kind: 'recycle-open' },
+        confidence: 'high',
+      });
+    }
+
+    /* "defrag if thats still a thing": on an SSD it is not, and running it would be actively wrong.
+     * The equivalent is TRIM (Optimize-Volume -ReTrim), which Windows already schedules weekly. So
+     * the finding is about the SCHEDULE having stopped running, and it names the right remedy for the
+     * media actually installed. Measured here: Intel Optane H10 with SSD, last optimized 1.1 days
+     * ago, result 0 - healthy, so nothing fires. */
+    const media = String(mt.mediaType || '').toLowerCase();
+    const isSSD = /ssd|nvme|optane/.test(media);
+    if (mt.optimizeDaysAgo != null && mt.optimizeDaysAgo > 30) {
+      add({
+        id: 'disk_optimize', sev: mt.optimizeDaysAgo > 90 ? S.WARN : S.INFO,
+        title: `Windows has not optimized C: in ${Math.round(mt.optimizeDaysAgo)} days`,
+        because: isSSD
+          ? `This is an SSD (${mt.disk || media}), so defragmenting is the wrong operation and would ` +
+            `only burn write cycles. What it needs is TRIM: telling the drive which blocks are dead ` +
+            `so its garbage collector can reclaim them. Windows schedules that weekly; the schedule ` +
+            `has stopped running. On a drive this full, skipped TRIM is a real write-speed cost.`
+          : `This is a spinning disk (${mt.disk || media}), so file fragmentation genuinely costs seek ` +
+            `time. Windows schedules a defragment weekly; the schedule has stopped running.`,
+        evidence: [`media type: ${mt.mediaType || 'unknown'}`,
+                   mt.lastOptimize ? `last run ${mt.lastOptimize.replace('T', ' ')}` : 'no recorded run',
+                   mt.optimizeResult != null ? `last result code ${mt.optimizeResult}` : 'no result recorded'],
+        action: isSSD ? 'Run TRIM once: Optimize-Volume -DriveLetter C -ReTrim. Then check why the scheduled task stopped.'
+                      : 'Run Optimize-Volume -DriveLetter C -Defrag, then check the scheduled task.',
+        lever: { kind: 'optimize', ssd: isSSD },
+        confidence: 'high',
+      });
+    }
+  }
+
+  /* ---------- 7. growth attribution — the question no live monitor can answer ---------- */
+  if (extra.growth && extra.growth.grew && extra.growth.grew.length) {
+    const g = extra.growth, top = g.grew[0];
+    if (top.deltaGB >= 1 && g.spanDays >= 0.02) {
+      const perDay = top.deltaGB / Math.max(g.spanDays, 0.04);
+      add({
+        id: 'growth', sev: S.WARN,
+        title: `${top.path.split('\\').pop()} grew ${top.deltaGB} GB over the last ${g.spanDays < 1 ? Math.round(g.spanDays * 24) + ' hours' : g.spanDays.toFixed(1) + ' days'}`,
+        because: `Comparing two MFT snapshots. Net change across the volume was ` +
+                 `${g.netGB > 0 ? '+' : ''}${g.netGB} GB. At ${perDay.toFixed(2)} GB/day this ` +
+                 `directory alone fills your remaining ${vol.freeGB} GB in ` +
+                 `${Math.max(1, Math.round(vol.freeGB / Math.max(perDay, 0.01)))} days.`,
+        evidence: [top.path, ...g.grew.slice(1, 4).map((r) => `${r.path} ${r.deltaGB > 0 ? '+' : ''}${r.deltaGB} GB`)],
+        action: 'Growth tab for the full list.',
+        confidence: 'high',
+      });
+    }
+  }
+
+  f.sort((a, b) => b.sev - a.sev);
+  const crit = f.filter((x) => x.sev === S.CRIT);
+  const summary = !f.length
+    ? 'Nothing wrong that I can measure.'
+    : (crit[0] || f[0]).title;
+
+  const WARMUP = 90;                       // seconds of wall clock, not samples
+  const span = hist.spanSec();
+  return {
+    ready: span >= WARMUP,
+    warmupSec: Math.max(0, Math.round(WARMUP - span)),
+    historySec: Math.round(span),
+    sampleRateHz: hist.ring.length > 1 ? +(hist.ring.length / Math.max(span, 1)).toFixed(2) : 0,
+    summary,
+    counts: { critical: crit.length, warning: f.filter((x) => x.sev === S.WARN).length, note: f.filter((x) => x.sev === S.INFO).length },
+    findings: f.map((x) => ({ ...x, sevName: NAME[x.sev], short: shortTitle(x.title) })),
+  };
+}
+
+module.exports = { diagnose };

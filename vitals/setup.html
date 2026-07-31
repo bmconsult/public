@@ -1,0 +1,393 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>VITALS Setup</title>
+<!-- VITALS - a system monitor that measures the machine it runs on and explains what it finds.
+     Copyright 2026 Ben M
+     SPDX-License-Identifier: Apache-2.0
+
+     THE SETUP SCREEN. Composed to one rule: nothing on it is decorative progress.
+
+     The filament down the left advances when a stage genuinely completes, and the only thing that
+     animates continuously is the node of the stage that is actually working - so an idle screen is
+     a still screen, and a fast machine visibly finishes fast (design-principles F5, J2).
+
+     The dominant object is the machine, not the installer. By the time the filament reaches the
+     bottom you are already reading your own processor, memory, disks and battery, which is the only
+     proof of a working install that is not just a checkmark asserting itself. -->
+<style>
+:root{
+  --bg:#07090e; --ink:#e8eef8; --ink-2:#93a3bd; --ink-3:#5e6c85;
+  --acc2:150,180,230; --fg:255,255,255;
+  --cpu:#3ad4c8; --ok:#4fd18b; --warn:#ffb03a; --crit:#ff5c6e;
+  --line:rgba(var(--acc2),.13); --line-2:rgba(var(--acc2),.07);
+  --rs:5px; --rc:4px;
+  --disp:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --txt:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  --mono:"Cascadia Mono",Consolas,ui-monospace,SFMono-Regular,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--txt); font-size:13px;
+  overflow:hidden; -webkit-font-smoothing:antialiased;
+}
+/* G5: depth via light, not boxes. One radial field behind everything, no card anywhere on the page. */
+#field{position:fixed; inset:0; pointer-events:none;
+  background:
+    radial-gradient(680px 420px at 68% 18%, rgba(58,212,200,.10), transparent 62%),
+    radial-gradient(560px 460px at 12% 92%, rgba(157,125,251,.075), transparent 66%);
+  transition:background .9s ease}
+body.done #field{
+  background:
+    radial-gradient(760px 480px at 68% 22%, rgba(79,209,139,.13), transparent 62%),
+    radial-gradient(560px 460px at 12% 92%, rgba(58,212,200,.07), transparent 66%)}
+
+#app{position:relative; height:100%; display:grid;
+  /* minmax(0,…) on both tracks - an unclamped track cannot be fixed from inside it (N2). */
+  grid-template-rows:auto minmax(0,1fr) auto; padding:0 26px}
+
+/* ---------------- header ---------------- */
+header{display:flex; align-items:baseline; gap:10px; padding:16px 0 13px; border-bottom:1px solid var(--line-2)}
+.mark{font-family:var(--disp); font-size:15px; font-weight:600; letter-spacing:.16em}
+.ver{font-family:var(--mono); font-size:10.5px; color:var(--ink-3)}
+.where{margin-left:auto; font-family:var(--mono); font-size:10.5px; color:var(--ink-3);
+  max-width:52%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl}
+
+/* ---------------- body: asymmetric, spine left, machine right ---------------- */
+main{display:grid; grid-template-columns:250px minmax(0,1fr); gap:34px; min-height:0; padding:20px 0 8px}
+
+/* the filament */
+/* align-self:start so the column is as tall as its STAGES, not as tall as the window. Stretched, the
+   rail ran a couple of hundred pixels past the last stage with nothing beside it - at which point
+   the filament stops measuring anything and becomes a stripe. Its length should mean "this much of
+   the work", and it only can if the track ends where the work ends. */
+#spine{position:relative; min-height:0; align-self:start}
+#rail{position:absolute; left:5px; top:6px; bottom:6px; width:1px; background:var(--line)}
+#lit{position:absolute; left:5px; top:6px; width:1px; height:0; background:linear-gradient(180deg,var(--cpu),var(--ok));
+  box-shadow:0 0 7px rgba(58,212,200,.55); transition:height .5s cubic-bezier(.2,.7,.2,1)}
+.st{position:relative; padding:0 0 15px 22px; opacity:.34; transition:opacity .35s ease}
+.st.on,.st.was{opacity:1}
+.st .dot{position:absolute; left:0; top:3px; width:11px; height:11px; border-radius:50%;
+  background:var(--bg); box-shadow:0 0 0 1px var(--line) inset; transition:box-shadow .3s ease}
+.st.on .dot{box-shadow:0 0 0 1px var(--cpu) inset, 0 0 10px rgba(58,212,200,.5); animation:beat 1.15s ease-in-out infinite}
+.st.was .dot{background:var(--ok); box-shadow:0 0 8px rgba(79,209,139,.5)}
+.st.bad .dot{background:var(--crit); box-shadow:0 0 8px rgba(255,92,110,.5); animation:none}
+.st.warned .dot{background:var(--warn); box-shadow:0 0 8px rgba(255,176,58,.45); animation:none}
+/* The ONLY continuous motion on the page, and it means "this is running right now". */
+@keyframes beat{0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(.76);opacity:.62}}
+.st h4{font-size:12px; font-weight:600; letter-spacing:.005em}
+.st p{font-size:10.5px; color:var(--ink-3); margin-top:2px; font-family:var(--mono); line-height:1.45}
+.st.bad p{color:var(--crit)}
+/* determinate sub-progress: a real fraction, which is the only kind that earns a bar */
+.sub{height:1px; background:var(--line); margin-top:7px; overflow:hidden}
+.sub i{display:block; height:100%; width:0; background:var(--cpu); transition:width .18s linear}
+
+/* the machine */
+#machine{min-height:0; display:flex; flex-direction:column}
+#hero{opacity:0; transform:translateY(-6px); transition:opacity .55s ease, transform .55s ease}
+#hero.in{opacity:1; transform:none}
+/* clamp, not a fixed size: processor names run from "Apple M3 Pro" to forty-odd characters of Xeon,
+   and a hero line that fits one of them clips the other. Two lines are allowed; three are not. */
+#cpuname{font-family:var(--disp); font-size:clamp(20px,2.9vw,30px); font-weight:600;
+  letter-spacing:-.018em; line-height:1.12; text-shadow:0 0 26px rgba(0,0,0,.6);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+#subid{margin-top:7px; font-family:var(--mono); font-size:11px; color:var(--ink-2); letter-spacing:.02em}
+#rule{height:1px; margin:17px 0 0; background:linear-gradient(90deg,rgba(var(--acc2),.30),rgba(var(--acc2),0));
+  transform-origin:left; transform:scaleX(0); transition:transform .7s cubic-bezier(.2,.7,.2,1)}
+#hero.in #rule{transform:none}
+
+/* H3: the data gets the typography. Readings are figures, labels are small caps. */
+#reads{display:grid; grid-template-columns:repeat(auto-fill,minmax(146px,1fr)); gap:14px 20px; margin-top:19px}
+.rd{opacity:0; transform:translateY(-5px); animation:land .45s cubic-bezier(.2,.7,.2,1) forwards}
+@keyframes land{to{opacity:1;transform:none}}
+.rd .k{font-size:9px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3)}
+/* NO ELLIPSIS ON A MEASUREMENT. "14.5 GB of 15.7 …" is not a smaller version of the reading, it is
+   a different and wrong one - the same failure as a plausible zero (M2). Values wrap and the type
+   gets out of the way instead. */
+.rd .v{font-family:var(--disp); font-size:18px; font-weight:600; margin-top:3px; letter-spacing:-.012em;
+  line-height:1.22; overflow-wrap:anywhere}
+.rd.live .v{color:var(--cpu)}
+.rd.warn .v{color:var(--warn)} .rd.off .v{color:var(--ink-3)}
+/* THE CLOSING STATEMENT, anchored to the bottom of its column by margin-top:auto.
+   Before this the page ran readings-then-void-then-footer, which is the "document flow" shape a
+   contemporary layout is trying not to make (H1). Pinning the verdict to the foot of the column
+   puts the emptiness BETWEEN two anchored objects, where it reads as breathing room instead of
+   leftover. It is also the right place for it: this sentence is the product's whole differentiator
+   (H5), and it was previously set smaller than the numbers it explains. */
+#verdict{margin-top:auto; padding-top:18px; opacity:0; animation:land .5s cubic-bezier(.2,.7,.2,1) .1s forwards}
+#verdict .k{font-size:9px; letter-spacing:.15em; text-transform:uppercase; color:var(--ink-3)}
+#verdict .v{font-family:var(--disp); font-size:17px; font-weight:500; line-height:1.4; margin-top:6px;
+  letter-spacing:-.006em; max-width:62ch}
+#verdict.warn .v{color:#ffd9a0} #verdict.ok .v{color:#bff0d5}
+/* G5: no container - a severity-tinted light field and one hairline spine, not a card. */
+#verdict.warn{box-shadow:inset 0 1px 0 rgba(255,176,58,.20)}
+#verdict.ok{box-shadow:inset 0 1px 0 rgba(79,209,139,.20)}
+
+/* ---------------- footer: options + the one action ---------------- */
+footer{border-top:1px solid var(--line-2); padding:13px 0 16px;
+  opacity:0; pointer-events:none; transition:opacity .5s ease}
+footer.in{opacity:1; pointer-events:auto}
+#opts{display:flex; flex-wrap:wrap; gap:7px 9px; margin-bottom:12px}
+.opt{display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+  border:1px solid var(--line); border-radius:var(--rc); padding:6px 10px 6px 8px;
+  transition:border-color .18s ease, background .18s ease}
+.opt:hover{border-color:rgba(var(--acc2),.26); background:rgba(var(--fg),.028)}
+.opt input{appearance:none; width:12px; height:12px; border:1px solid rgba(var(--acc2),.42);
+  border-radius:2px; flex:none; position:relative; cursor:pointer; transition:all .16s ease}
+.opt input:checked{background:var(--cpu); border-color:var(--cpu)}
+.opt input:checked::after{content:''; position:absolute; left:3px; top:.5px; width:3px; height:7px;
+  border:solid #04121a; border-width:0 1.6px 1.6px 0; transform:rotate(42deg)}
+.opt .t{font-size:11.5px}
+/* Already-on reads as SETTLED, not as selected: a hairline in the accent and slightly quieter
+   label, so a returning user can see at a glance which of these they have already done. */
+.opt.was-on{border-color:rgba(58,212,200,.30); background:rgba(58,212,200,.045)}
+#why{font-size:10.5px; color:var(--ink-3); font-family:var(--mono); min-height:15px; line-height:1.4;
+  margin-bottom:11px; transition:color .2s ease}
+#act{display:flex; align-items:center; gap:14px}
+#go{font-family:var(--txt); font-size:12.5px; font-weight:600; letter-spacing:.01em; color:#04121a;
+  background:var(--cpu); border:1px solid var(--cpu); border-radius:var(--rc); padding:8px 20px;
+  cursor:pointer; transition:filter .16s ease, transform .1s ease}
+#go:hover{filter:brightness(1.09)} #go:active{transform:translateY(1px)}
+#go[disabled]{opacity:.4; cursor:default; filter:none}
+#note{font-size:10.5px; color:var(--ink-3); font-family:var(--mono)}
+#note b{color:var(--ok); font-weight:400} #note i{color:var(--crit); font-style:normal}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}
+  .rd{opacity:1; transform:none} #hero{opacity:1; transform:none} #rule{transform:none}}
+</style>
+
+<div id="field"></div>
+<div id="app">
+  <header>
+    <span class="mark">VITALS</span>
+    <span class="ver">__VERSION__</span>
+    <span class="where" id="where"></span>
+  </header>
+
+  <main>
+    <div id="spine">
+      <div id="rail"></div><div id="lit"></div>
+      <div class="st" data-id="payload"><div class="dot"></div><h4>Payload</h4><p>waiting</p>
+        <div class="sub"><i></i></div></div>
+      <div class="st" data-id="runtime"><div class="dot"></div><h4>Runtime</h4><p>waiting</p></div>
+      <div class="st" data-id="platform"><div class="dot"></div><h4>Platform</h4><p>waiting</p></div>
+      <div class="st" data-id="measure"><div class="dot"></div><h4>First measurement</h4><p>waiting</p></div>
+    </div>
+
+    <div id="machine">
+      <div id="hero">
+        <div id="cpuname">Reading this machine…</div>
+        <div id="subid"></div>
+        <div id="rule"></div>
+      </div>
+      <div id="reads"></div>
+      <div id="verdict"></div>
+    </div>
+  </main>
+
+  <footer id="foot">
+    <div id="opts"></div>
+    <div id="why">All optional, all off. VITALS works without any of it — and you can run Setup again
+      later to turn these on or off.</div>
+    <div id="act">
+      <button id="go" disabled>Open VITALS</button>
+      <span id="note"></span>
+    </div>
+  </footer>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const PORT = '__PORT__';
+const stages = {};
+document.querySelectorAll('.st').forEach((el) => { stages[el.dataset.id] = el; });
+const ORDER = ['payload', 'runtime', 'platform', 'measure'];
+let doneCount = 0;
+
+/* The filament's height is (stages finished / stages total) of the rail. It cannot run ahead of
+   the work because it is computed from the work. */
+function advance() {
+  const rail = $('#rail').getBoundingClientRect().height;
+  $('#lit').style.height = Math.round(rail * (doneCount / ORDER.length)) + 'px';
+}
+
+function setStage(id, state, label, detail) {
+  const el = stages[id]; if (!el) return;
+  el.classList.remove('on', 'bad', 'warned');
+  if (state === 'run') el.classList.add('on');
+  else {
+    el.classList.add('was');
+    if (state === 'fail') el.classList.add('bad');
+    if (state === 'warn') el.classList.add('warned');
+    if (!el.dataset.counted) { el.dataset.counted = '1'; doneCount++; advance(); }
+  }
+  if (label) el.querySelector('h4').textContent = label;
+  el.querySelector('p').textContent = detail || (state === 'run' ? 'working…' : '');
+}
+
+/* The hero assembles from identity facts as they arrive - it is not a template waiting to be
+   filled, so a machine that cannot report a processor name simply never claims one. */
+const id = {};
+function paintHero() {
+  if (id.cpu) $('#cpuname').textContent = id.cpu;
+  const bits = [];
+  if (id.cores) bits.push(id.cores + ' logical cores');
+  if (id.ram) bits.push(id.ram);
+  if (id.os) bits.push(id.os);
+  $('#subid').textContent = bits.join('  ·  ');
+  if (id.cpu) $('#hero').classList.add('in');
+}
+
+const shown = new Set();
+function addRead(key, label, value, state, wide) {
+  if (shown.has(key)) {
+    const ex = document.getElementById('rd-' + key);
+    if (ex) ex.querySelector('.v').textContent = value;
+    return;
+  }
+  shown.add(key);
+  const d = document.createElement('div');
+  d.className = 'rd ' + (state || '') + (wide ? ' wide' : '');
+  d.id = 'rd-' + key;
+  d.innerHTML = '<div class="k"></div><div class="v"></div>';
+  d.querySelector('.k').textContent = label;
+  d.querySelector('.v').textContent = value;
+  $('#reads').appendChild(d);
+}
+
+const IDENTITY = { cpu: 'cpu', cores: 'cores', ram: 'ram' };
+
+const ev = new EventSource('/events');
+ev.onmessage = (m) => {
+  const e = JSON.parse(m.data);
+
+  if (e.t === 'begin') { $('#where').textContent = e.dir; }
+
+  if (e.t === 'stage') setStage(e.id, e.state, e.label, e.detail);
+
+  if (e.t === 'progress') {
+    const el = stages[e.id]; if (!el) return;
+    const bar = el.querySelector('.sub i');
+    if (bar) bar.style.width = Math.round(100 * e.done / e.total) + '%';
+    el.querySelector('p').textContent =
+      `${e.done} / ${e.total} files · ${(e.bytes / 1048576).toFixed(1)} MB hashed`;
+  }
+
+  if (e.t === 'fact') {
+    if (e.group === 'machine' && IDENTITY[e.key]) {
+      if (e.key === 'cpu') id.cpu = e.value;
+      if (e.key === 'cores') id.cores = e.value;
+      if (e.key === 'ram') id.ram = e.value;
+      paintHero();
+      return;
+    }
+    if (e.group === 'platform' && e.key === 'os') { id.os = e.value; paintHero(); return; }
+    /* Only live machine readings become figures. Platform capability lines are the stage's own
+       detail text - promoting them here would say the same thing twice (H2). */
+    if (e.group === 'machine' && e.key === 'verdict') {
+      const v = $('#verdict');
+      v.className = e.state === 'warn' ? 'warn' : 'ok';
+      v.innerHTML = '<div class="k"></div><div class="v"></div>';
+      v.querySelector('.k').textContent = e.label;
+      v.querySelector('.v').textContent = e.value;
+      return;
+    }
+    if (e.group === 'machine') addRead(e.key, e.label, e.value, e.state);
+  }
+
+  if (e.t === 'done') {
+    document.body.classList.add('done');
+    $('#foot').classList.add('in');
+    $('#go').disabled = false;
+    $('#note').innerHTML = e.ok
+      ? 'VITALS is already running on port ' + PORT + '. <b>Nothing else to install.</b>'
+      : '<i>Setup could not finish.</i> The stage above says why.';
+    if (!e.ok) $('#go').textContent = 'Open anyway';
+  }
+};
+
+/* Options are fetched, never hard-coded here: the server decides what this platform can honour,
+   so a control that would fail on this OS is never drawn. */
+/* The server reports each option's CURRENT state and the boxes start there, so re-running setup
+   shows what you already chose instead of a fresh set of empty boxes that quietly disagree with
+   your Start menu. `was` remembers the state we loaded, which is how the button below can tell a
+   real change from a no-op. */
+let DEFAULT_WHY = $('#why').textContent;
+fetch('/options').then((r) => r.json()).then((list) => {
+  const box = $('#opts');
+  let anyOn = false;
+  for (const o of list) {
+    const l = document.createElement('label');
+    l.className = 'opt';
+    l.innerHTML = '<input type="checkbox"><span class="t"></span>';
+    l.querySelector('.t').textContent = o.label;
+    l.querySelector('input').checked = !!o.on;
+    l.dataset.id = o.id; l.dataset.was = o.on ? '1' : '';
+    if (o.on) { l.classList.add('was-on'); anyOn = true; }
+    l.addEventListener('mouseenter', () => { $('#why').textContent = o.detail; });
+    l.addEventListener('mouseleave', () => { $('#why').textContent = DEFAULT_WHY; });
+    l.addEventListener('change', updateAction);
+    box.appendChild(l);
+  }
+  if (anyOn) {
+    DEFAULT_WHY = 'Ticked items are already set up. Untick one to remove it — this screen is how you '
+                + 'change them later, and you can reopen it any time with Setup.';
+    $('#why').textContent = DEFAULT_WHY;
+  }
+  updateAction();
+});
+
+/* The button says what it is about to do. "Open VITALS" while three boxes changed would be a
+   button lying about its own side effects. */
+function changes() {
+  const on = [], off = [];
+  for (const l of document.querySelectorAll('.opt')) {
+    const now = l.querySelector('input').checked, was = !!l.dataset.was;
+    if (now && !was) on.push(l.dataset.id);
+    if (!now && was) off.push(l.dataset.id);
+  }
+  return { on, off };
+}
+function updateAction() {
+  const c = changes();
+  const n = c.on.length + c.off.length;
+  const go = $('#go');
+  if (go.dataset.busy) return;
+  go.textContent = n ? `Apply ${n} change${n > 1 ? 's' : ''} and open VITALS` : 'Open VITALS';
+}
+
+$('#go').addEventListener('click', async () => {
+  const go = $('#go');
+  go.disabled = true; go.dataset.busy = '1';
+  const c = changes();
+  if (c.on.length || c.off.length) {
+    go.textContent = 'Applying…';
+    try {
+      const r = await (await fetch('/apply', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(c),
+      })).json();
+      const bad = (r.results || []).filter((x) => !x.ok);
+      /* If an option failed, SAY SO and stop - silently opening the app would leave the user
+         believing a shortcut exists that does not. Reset the failed boxes to the state that is
+         actually true, so the screen never shows a tick that nothing backs up. */
+      if (bad.length) {
+        $('#why').textContent = bad.map((b) => b.id + ': ' + b.why).join(' · ');
+        $('#why').style.color = 'var(--warn)';
+        for (const b of bad) {
+          const l = document.querySelector('.opt[data-id="' + b.id + '"]');
+          if (l) l.querySelector('input').checked = !!l.dataset.was;
+        }
+        delete go.dataset.busy;
+        go.disabled = false;
+        updateAction();
+        return;
+      }
+      /* Whatever succeeded is now the baseline, so a second press cannot redo it. */
+      for (const l of document.querySelectorAll('.opt')) {
+        l.dataset.was = l.querySelector('input').checked ? '1' : '';
+      }
+    } catch {}
+  }
+  go.textContent = 'Opening…';
+  fetch('/launch', { method: 'POST' });
+});
+</script>

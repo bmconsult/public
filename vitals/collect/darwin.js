@@ -1,0 +1,360 @@
+/* VITALS - a system monitor that measures the machine it runs on and explains what it finds.
+ * Copyright 2026 Ben M
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* VITALS - macOS COLLECTOR PLUG.
+ *
+ * ############################################################################################
+ * ##  UNVERIFIED. There is no Mac on the bench this was written on. Every field offset and   ##
+ * ##  every output format below is taken from documented tool behaviour, NOT from observed   ##
+ * ##  output. Nothing here has ever executed on real hardware.                               ##
+ * ##                                                                                         ##
+ * ##  caps.js declares this platform unverified and the panel says so on screen. The first   ##
+ * ##  person to run it should check each number against Activity Monitor, fix what is wrong, ##
+ * ##  and flip `verified` in caps.js. Do not remove this banner before that happens.         ##
+ * ############################################################################################
+ *
+ * DESIGN. macOS has no /proc, so unlike the Linux plug this one has to shell out. Two decisions
+ * follow from that, and both are about not paying fork/exec 3+ times a second:
+ *
+ *   1. ONE LONG-LIVED `iostat -w 1` CHILD supplies CPU percentages, disk throughput and load
+ *      average as a continuous 1 Hz stream. This mirrors the Windows design for the same reason:
+ *      a process spawned per sample spends more time booting than measuring. It also sidesteps the
+ *      `top -l 1` trap, where the FIRST sample is an average since boot rather than an interval,
+ *      so a naive one-shot reports the machine's whole uptime as if it were the last second.
+ *
+ *   2. EVERYTHING ELSE IS ONE COMBINED SHELL CALL PER TICK, not three. vm_stat, ps and netstat are
+ *      run inside a single `sh -c` with delimiters between their outputs, so the per-second cost is
+ *      one fork instead of three.
+ *
+ * WHAT IS DELIBERATELY ABSENT. No GPU utilisation (needs powermetrics, which requires root) and no
+ * per-process disk I/O (needs fs_usage, root, and on some releases SIP disabled). Those are declared
+ * false in caps.js and the panel omits the features rather than drawing empty gauges.
+ */
+
+const { spawn, execFile } = require('child_process');
+const os = require('os');
+
+function realSh(cmd, cb) {
+  execFile('/bin/sh', ['-c', cmd], { maxBuffer: 8 << 20, timeout: 5000 }, (err, out) => cb(err ? '' : out));
+}
+
+/* THE INJECTION SEAM. Everything this collector knows about the machine arrives as text through
+ * exactly two doors: `sh()` for the one-shots and `spawnIostat()` for the streaming child. Making
+ * both replaceable means the ENTIRE collector - the memory arithmetic, the ps aggregation, the
+ * netstat de-duplication, the mAh-to-watt-hour conversion, the rate differencing between ticks -
+ * can be driven from fixture text on a machine that is not a Mac.
+ *
+ * BE PRECISE ABOUT WHAT THAT BUYS. It does NOT verify that the fixtures match what macOS really
+ * emits; only a Mac can settle that. It verifies everything DOWNSTREAM of the format assumption,
+ * which is most of this file and all of the arithmetic. A green suite here means "given that output,
+ * the maths is right" - a genuinely useful claim, and a strictly weaker one than "it works".
+ *
+ * The same seam is how a real capture becomes a real test: drop genuine `vm_stat` output in place of
+ * the fixture and the identical suite becomes verification. See tools/capture-macos-fixtures.sh. */
+let sh = realSh;
+let spawnIostat = () => spawn('iostat', ['-w', '1']);
+function _inject(fakeSh, fakeIostat) { sh = fakeSh || realSh; if (fakeIostat) spawnIostat = fakeIostat; }
+
+/* ---------------- vm_stat ----------------
+ * Output is "Pages free:  123456." - note the trailing period, which breaks parseInt if the line is
+ * split on whitespace and the last token taken verbatim. Page size is announced in the header line
+ * and is 16384 on Apple Silicon, 4096 on Intel; hard-coding either is wrong on half the fleet. */
+function parseVmStat(text) {
+  const out = {};
+  const ps = /page size of (\d+) bytes/.exec(text);
+  out.pageSize = ps ? +ps[1] : 4096;
+  for (const line of text.split('\n')) {
+    const x = /^"?([A-Za-z][^:]*?)"?:\s+(\d+)\.?\s*$/.exec(line.trim());
+    /* Some vm_stat rows quote their key ("Translation faults"). The closing quote is not a colon, so
+       a greedy [^:]* swallows it into the key and every lookup of that name silently misses. Lazy
+       match plus an explicit strip; the trailing period on the VALUE is handled by the \.? above. */
+    if (x) out[x[1].replace(/^"|"$/g, '').trim()] = +x[2];
+  }
+  return out;
+}
+
+/* ---------------- iostat stream ----------------
+ * Columns under the `cpu` group are us / sy / id. Disk columns repeat per device as KB/t, tps, MB/s.
+ * The header is reprinted periodically, so any line that is not numeric is skipped rather than
+ * parsed into NaN. */
+function parseIostatLine(line, diskCount) {
+  const n = line.trim().split(/\s+/).map(Number);
+  if (!n.length || n.some((v) => !Number.isFinite(v))) return null;
+  const diskCols = diskCount * 3;
+  if (n.length < diskCols + 3) return null;
+  let mbs = 0;
+  for (let i = 0; i < diskCount; i++) mbs += n[i * 3 + 2] || 0;
+  const us = n[diskCols], sy = n[diskCols + 1], id = n[diskCols + 2];
+  return { us, sy, id, busy: Math.max(0, Math.min(100, 100 - id)), mbs };
+}
+
+function start(root, { onStatic, onTick, onError }) {
+  let stopped = false, timer = null, tick = 0;
+  let cpuNow = null, diskMBs = 0, diskCount = 1;
+  /* NULL until pmset actually answers. `{bat:false}` as an initial value tells a MacBook owner
+     their laptop has no battery for the first second or two of every launch. */
+  let prevNet = null, prevPageins = null, prevProc = null, prevPwr = null;
+  let prevAt = process.hrtime.bigint();
+  let volCache = null;
+  /* ONE SOURCE OF TRUTH for installed RAM. The static event reported hw.memsize while the tick used
+     os.totalmem(); on ordinary hardware those agree, so the split was invisible - but under a memory
+     limit, a VM or a container they diverge, and the panel would then show a machine whose total RAM
+     changed depending on which line you read. Captured once from sysctl, used by both. */
+  let ramMB = Math.round(os.totalmem() / 1048576);
+
+  /* -------- static -------- */
+  sh('sysctl -n machdep.cpu.brand_string hw.physicalcpu hw.ncpu hw.memsize; sw_vers -productVersion',
+    (out) => {
+      const L = out.trim().split('\n');
+      if (+L[3]) ramMB = Math.round(+L[3] / 1048576);
+      onStatic({
+        t: 'static',
+        cpu: (L[0] || os.cpus()[0]?.model || 'unknown').trim(),
+        cores: +L[1] || os.cpus().length,
+        threads: +L[2] || os.cpus().length,
+        ramMB,
+        gpu: [],                      // no unprivileged GPU enumeration worth trusting
+        nvidia: false,
+        host: os.hostname(),
+        os: `macOS ${(L[4] || '').trim()} (Darwin ${os.release()})`,
+      });
+    });
+
+  /* -------- long-lived iostat -------- */
+  let ios = null;
+  function bootIostat() {
+    if (stopped) return;
+    ios = spawnIostat();
+    let buf = '';
+    ios.stdout.on('data', (c) => {
+      buf += c.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        /* The device header names every disk; count them so the column maths stays right on a Mac
+           with an external drive attached. */
+        if (/disk\d/.test(line) && !/\d\.\d/.test(line)) {
+          diskCount = (line.match(/disk\d+/g) || ['disk0']).length;
+          continue;
+        }
+        if (/[A-Za-z]/.test(line)) continue;          // any other header row
+        const r = parseIostatLine(line, diskCount);
+        if (r) { cpuNow = r; diskMBs = r.mbs; }
+      }
+    });
+    ios.on('error', () => onError('[metrics/darwin] iostat unavailable'));
+    ios.on('exit', () => { if (!stopped) setTimeout(bootIostat, 2000); });
+  }
+  bootIostat();
+
+  /* -------- battery, polled slowly -------- */
+  function pollPower() {
+    sh('pmset -g batt; echo "---IOREG---"; ioreg -rn AppleSmartBattery 2>/dev/null | ' +
+       'grep -E "\\"(CycleCount|DesignCapacity|AppleRawMaxCapacity|AppleRawCurrentCapacity|Voltage|InstantAmperage)\\"" || true',
+      (out) => {
+        const [battTxt, ioregTxt = ''] = out.split('---IOREG---');
+        if (!/InternalBattery/.test(battTxt)) { prevPwr = { bat: false }; return; }
+        const pct = (/(\d+)%/.exec(battTxt) || [])[1];
+        const state = /discharging/i.test(battTxt) ? 'Discharging'
+                    : /charging/i.test(battTxt) ? 'Charging' : 'Full';
+        const num = (k) => { const x = new RegExp(`"${k}"\\s*=\\s*(-?\\d+)`).exec(ioregTxt); return x ? +x[1] : null; };
+        const mV = num('Voltage'), mA = num('InstantAmperage');
+        const volts = mV ? mV / 1000 : null;
+        /* IOKit reports capacities in mAh, so watt-hours need the pack voltage. Without it the honest
+           answer is null, not a made-up conversion at an assumed 11.4 V. */
+        const toWh = (mAh) => (mAh == null || volts == null ? null : Math.round(mAh * volts / 1000 * 10) / 10);
+        let rateW = (mA != null && volts != null) ? Math.round(Math.abs(mA) * volts / 1000 * 10) / 10 : null;
+        if (rateW != null) rateW = state === 'Discharging' ? -rateW : rateW;
+        const remMin = (/(\d+):(\d+) remaining/.exec(battTxt) || []);
+        prevPwr = {
+          bat: true,
+          pct: pct == null ? 255 : +pct,
+          ac: /AC Power/.test(battTxt),
+          charging: state === 'Charging',
+          discharging: state === 'Discharging',
+          rateW,
+          remWh: toWh(num('AppleRawCurrentCapacity')),
+          fullWh: toWh(num('AppleRawMaxCapacity')),
+          designWh: toWh(num('DesignCapacity')),
+          cycles: num('CycleCount') || 0,
+          chem: 'Li-ion',
+          lifeMin: remMin.length ? (+remMin[1] * 60 + +remMin[2]) : null,
+        };
+      });
+  }
+  pollPower();
+
+  function pollVolumes() {
+    /* -k for kilobyte units so the numbers are machine-readable, and the mount point is everything
+       after the 9th column because a volume name may legally contain spaces. */
+    /* PARSED BY SHAPE, NOT BY FIELD INDEX. Two things break naive splitting of df output, and the
+       simulation caught both:
+         1. The FILESYSTEM column can contain spaces ("map auto_home"), which shifts every field
+            counted from the left.
+         2. Locating the mount with line.indexOf(field) finds the FIRST occurrence. For the root
+            volume the mount is "/", and the first "/" in the line is inside "/dev/disk3s1s1" at
+            index 0 - so the mount came back as the entire line, which then matched the ^/dev
+            exclusion and DROPPED THE ROOT VOLUME ENTIRELY. The main disk, silently missing.
+       Anchoring on the numeric block instead is immune to both: a lazy filesystem group, the three
+       size columns, capacity, the optional inode columns, and the mount as the rest of the line. */
+    sh("df -kl | tail -n +2", (out) => {
+      const v = [];
+      const ROW = /^(.*?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%\s+(?:[\d-]+\s+[\d-]+\s+[\d-]+%\s+)?(\/.*)$/;
+      for (const line of out.split('\n')) {
+        const m = ROW.exec(line.trim());
+        if (!m) continue;
+        const sizeKB = +m[2], availKB = +m[4];
+        const mnt = m[6].trim();
+        /* `Data` joins the exclusion list: on modern macOS / and /System/Volumes/Data are the SAME
+           APFS container and report identical size and free space, so listing both shows the user
+           two copies of one disk. Root is the canonical row. */
+        if (!sizeKB || /^\/(dev|System\/Volumes\/(Data|VM|Preboot|Update|xarts|iSCPreboot|Hardware))/.test(mnt)) continue;
+        const size = sizeKB * 1024, free = availKB * 1024;
+        v.push({
+          id: mnt, label: m[1].replace('/dev/', ''),
+          sizeGB: Math.round(size / 1073741824 * 10) / 10,
+          freeGB: Math.round(free / 1073741824 * 10) / 10,
+          pct: Math.round(((size - free) / size) * 1000) / 10,
+        });
+      }
+      if (v.length) volCache = v;
+    });
+  }
+  pollVolumes();
+
+  /* -------- the tick -------- */
+  function sample() {
+    if (stopped) return;
+    tick++;
+    if (tick % 15 === 1) pollPower();
+    if (tick % 10 === 1) pollVolumes();
+
+    /* ONE fork for all three. See the header note. */
+    sh('vm_stat; echo "---PS---"; ps -Ao pid,rss,%cpu,comm; echo "---NET---"; netstat -ib', (out) => {
+      if (stopped) return;
+      try {
+        const now = process.hrtime.bigint();
+        const elapsed = Number(now - prevAt) / 1e9;
+        prevAt = now;
+
+        const [vmTxt = '', psTxt = '', netTxt = ''] = out.split(/---PS---|---NET---/);
+        const vm = parseVmStat(vmTxt);
+        const pg = vm.pageSize;
+        const mb = (pages) => ((pages || 0) * pg) / 1048576;
+
+        /* macOS "used" excludes the purgeable and file-backed pages the kernel will hand back on
+           demand, the same reasoning as MemAvailable on Linux. Compressed pages ARE used - they are
+           real resident data, just squeezed. */
+        const totalMB = ramMB;
+        const freeish = mb(vm['Pages free']) + mb(vm['Pages purgeable']) + mb(vm['File-backed pages']);
+        const usedMB = Math.max(0, Math.round(totalMB - freeish));
+
+        /* Pageins is cumulative since boot; differencing it gives the same quantity the Windows
+           hard-fault counter reports. */
+        const pageins = vm['Pageins'] ?? null;
+        const pagesSec = (pageins != null && prevPageins != null)
+          ? Math.round(Math.max(0, pageins - prevPageins) / elapsed) : null;
+
+        /* ps %cpu needs NO delta - the kernel maintains it - but it is a decaying average rather
+           than an instantaneous reading, and it is expressed relative to ONE core. Both differences
+           from the Windows and Linux plugs are handled: the scale is corrected where procOut is
+           built below, and caps.js marks proc.cpu 'partial' for the averaging.
+           (An earlier version of this comment claimed ps was "already normalised per core", which is
+           the opposite of true and sat twenty lines above the code correcting for it.) */
+        const agg = new Map();
+        for (const line of psTxt.split('\n').slice(1)) {
+          const x = /^\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(.*)$/.exec(line);
+          if (!x) continue;
+          const name = (x[4].split('/').pop() || x[4]).trim();
+          let a = agg.get(name);
+          if (!a) { a = { n: name, mb: 0, cpu: 0, count: 0, pids: [] }; agg.set(name, a); }
+          a.mb += +x[2] / 1024;                 // ps reports RSS in kB
+          a.cpu += +x[3];
+          a.count++;
+          if (a.pids.length < 40) a.pids.push(+x[1]);
+        }
+        /* SCALE CORRECTION. macOS `ps` reports %cpu relative to ONE core, so a saturated
+           multi-threaded process reads up to N x 100. Windows (metrics.ps1) and Linux both divide
+           by logical-CPU count, so leaving this raw would make Mac process CPU run up to 10x hotter
+           than the same process on the other two platforms - and the group sum below compounds it.
+           Divided here so one number means one thing across all three plugs.
+           UNVERIFIED on hardware: this rests on ps's documented semantics, not observed output. */
+        const threads = os.cpus().length || 1;
+        const procOut = [...agg.values()].map((a) => ({
+          n: a.n, mb: Math.round(a.mb), cpu: Math.round((a.cpu / threads) * 10) / 10,
+          ioMBs: null, rMBs: null, wMBs: null, pf: null, count: a.count, pids: a.pids,
+        })).sort((x, y) => y.mb - x.mb);
+
+        /* netstat -ib repeats each interface once per address family; the first row per interface
+           carries the byte totals, so later duplicates are skipped rather than summed. */
+        let rx = 0, tx = 0; const seen = new Set();
+        for (const line of netTxt.split('\n').slice(1)) {
+          const p = line.trim().split(/\s+/);
+          if (p.length < 10) continue;
+          const nic = p[0];
+          if (seen.has(nic) || nic === 'lo0' || /^(gif|stf|utun|awdl|llw|bridge)/.test(nic)) continue;
+          const ib = +p[p.length - 5], ob = +p[p.length - 2];
+          if (!Number.isFinite(ib) || !Number.isFinite(ob)) continue;
+          seen.add(nic); rx += ib; tx += ob;
+        }
+
+        /* NULL, not 0. If iostat is missing, was killed, or has not emitted its first data line,
+           a 0 here reports a perfectly idle CPU forever - confidently, with no gate to hide it.
+           That is the precise failure the header of caps.js recounts from the nvidia-smi episode. */
+        const cpuPct = cpuNow ? cpuNow.busy : null;
+        onTick({
+          t: 'tick',
+          ts: Date.now(),
+          /* No per-core breakdown without a native addon; the ring shows the total and the per-core
+             strip is hidden by caps.js rather than filled with copies of the average. */
+          cpu: { total: cpuPct, cores: [] },
+          mem: {
+            usedMB, freeMB: totalMB - usedMB, totalMB,
+            committedMB: null,
+            pct: Math.round((usedMB / totalMB) * 1000) / 10,
+            cacheMB: Math.round(mb(vm['File-backed pages'])),
+            pagesSec,
+          },
+          disk: {
+            /* null, not [] - an empty array renders as "this machine has no disks". */
+            vols: volCache,
+            /* iostat gives combined throughput only; read and write are not split, and busy time is
+               not exposed at all without ioreg spelunking. Nulls, not zeros. */
+            io: { readMBs: null, writeMBs: null, combinedMBs: Math.round(diskMBs * 100) / 100,
+                  busyPct: null, queue: null },
+          },
+          /* First tick has nothing to difference against, so the honest answer is null - not 0,
+             which would read as a genuinely idle network. The Linux plug suppresses its whole
+             first tick for the same reason; this one cannot, because iostat drives the cadence. */
+          net: {
+            rxMBs: prevNet ? Math.round(Math.max(0, rx - prevNet.rx) / 1048576 / elapsed * 1000) / 1000 : null,
+            txMBs: prevNet ? Math.round(Math.max(0, tx - prevNet.tx) / 1048576 / elapsed * 1000) / 1000 : null,
+          },
+          proc: procOut.slice(0, 16),
+          gpu: null, gpus: null,
+          pwr: prevPwr,
+          /* NOT zeros. The FOOTPRINT page says "these numbers include the cost of producing this
+             page"; emitting 0.00% cpu / 0 MB there is a measured-looking lie. Null degrades to
+             "not measured on this platform". */
+          self: null,
+          up: Math.round((os.uptime() / 3600) * 10) / 10,
+        });
+
+        prevNet = { rx, tx };
+        prevPageins = pageins;
+        prevProc = agg;
+      } catch (e) {
+        onError('[metrics/darwin] ' + e.message);
+      }
+    });
+  }
+
+  timer = setInterval(sample, 1000);
+  sample();
+  return {
+    stop() { stopped = true; clearInterval(timer); try { ios && ios.kill(); } catch {} },
+  };
+}
+
+module.exports = { start, _inject, _internal: { parseVmStat, parseIostatLine } };

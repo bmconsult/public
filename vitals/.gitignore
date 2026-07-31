@@ -1,0 +1,15 @@
+# VITALS writes into history/ as soon as you run it: telemetry, the event journal, the Ask
+# conversation, the clipboard log. None of that is yours to publish and none of it is ours.
+# The procsamples fixtures are tracked because the Linux parser suite reads them.
+history/*
+!history/README.txt
+!history/procsamples/
+
+# build output
+dist/
+.bundle-cache/
+
+# runtime dropped in by a portable build
+runtime/
+
+node_modules/

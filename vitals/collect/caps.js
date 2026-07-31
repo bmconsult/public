@@ -1,0 +1,248 @@
+/* VITALS - a system monitor that measures the machine it runs on and explains what it finds.
+ * Copyright 2026 Ben M
+ * SPDX-License-Identifier: Apache-2.0
+ */
+/* VITALS - CAPABILITY MANIFEST. What each operating system can honestly answer.
+ *
+ * THE POINT OF THIS FILE. VITALS was built against Windows perf counters, which happen to expose
+ * an unusually complete picture: per-process I/O, per-adapter GPU, hard fault rates, NTFS internals.
+ * Almost none of that ports one-for-one. macOS has no per-process disk I/O without elevation;
+ * Linux has no NTFS master file table; neither has anything resembling `GPU Engine` counters.
+ *
+ * The tempting move is to emit zeros for whatever the host cannot measure. That is the single worst
+ * thing this tool could do, and it is a lesson already paid for once on Windows: nvidia-smi read the
+ * idle discrete GPU while the integrated one did all the work, and the panel confidently displayed
+ * "GPU 0%" while a GPU was pegged. A plausible zero is worse than a blank, because a blank prompts a
+ * question and a zero ends one.
+ *
+ * So capability is declared UP FRONT, per platform, and the panel gates on it. A feature the host
+ * cannot measure is not drawn dim, not drawn at zero - it is absent, and the page says why. Every
+ * value that does appear was genuinely measured on the machine in front of you.
+ *
+ * Values:  true      the host answers this properly
+ *          'partial' answered, but weaker than the Windows original - `note` says how
+ *          false     not available; the UI must omit the feature entirely
+ *
+ * VERIFICATION STATUS is tracked per platform and is deliberately visible in the UI, because an
+ * untested collector making confident claims is exactly the failure this file exists to prevent.
+ */
+
+/* Every key the panel is allowed to gate on. Adding a feature to the UI means adding it here first,
+   so a new page cannot silently ship a Windows-only assumption. */
+const KEYS = [
+  'cpu.perCore', 'cpu.temps',
+  'mem.hardFaults', 'mem.committed', 'mem.cache',
+  'disk.perVolume', 'disk.io', 'disk.perDevice',
+  'net.rates', 'net.perInterface', 'net.sockets',
+  'proc.list', 'proc.cpu', 'proc.mem', 'proc.io', 'proc.faults',
+  'gpu.total', 'gpu.perAdapter', 'gpu.perProcess',
+  'power.battery', 'power.rate', 'power.health',
+  'scan.mft', 'scan.iotrace', 'scan.growth', 'scan.startup',
+  'clip.history',
+  'act.restartApp', 'act.clean', 'act.kill', 'act.elevate',
+  'host.frameless', 'host.tray',
+];
+
+const PLATFORMS = {
+
+  /* ---------------------------------------------------------------- WINDOWS
+   * The reference implementation. Everything the panel does was designed against these counters,
+   * and every one of these entries has been observed working on a real machine. */
+  win32: {
+    name: 'Windows',
+    collector: 'metrics.ps1 (PowerShell, PerformanceCounter bulk read)',
+    verified: 'measured on Windows 11 26H1, i7-1165G7, hybrid Iris Xe + GTX 1650',
+    caps: {
+      'cpu.perCore': true, 'cpu.temps': 'partial',
+      'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
+      'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': true,
+      'net.rates': true, 'net.perInterface': true, 'net.sockets': true,
+      'proc.list': true, 'proc.cpu': true, 'proc.mem': true, 'proc.io': true, 'proc.faults': true,
+      'gpu.total': true, 'gpu.perAdapter': true, 'gpu.perProcess': true,
+      'power.battery': true, 'power.rate': true, 'power.health': true,
+      'scan.mft': true, 'scan.iotrace': true, 'scan.growth': true, 'scan.startup': true,
+      'clip.history': true,
+      'act.restartApp': true, 'act.clean': true, 'act.kill': true, 'act.elevate': true,
+      'host.frameless': true, 'host.tray': true,
+    },
+    notes: {
+      'cpu.temps': 'Windows exposes no CPU temperature to unprivileged code. Present only when ' +
+                   'LibreHardwareMonitor is running and serving its web endpoint on :8085.',
+    },
+  },
+
+  /* ---------------------------------------------------------------- LINUX
+   * /proc and /sys, read directly by Node - no shelling out, so the per-tick cost is a handful of
+   * small file reads. The kernel exposes cumulative counters in almost exactly the shape the Windows
+   * collector produces after differencing, which is why this port is the clean one.
+   *
+   * What genuinely does not exist here: an NTFS master file table (the scan.mft page is Windows-only
+   * by definition), and any vendor-neutral per-process GPU accounting. */
+  linux: {
+    name: 'Linux',
+    collector: 'collect/linux.js (direct /proc and /sys reads, no subprocesses)',
+    /* Run end to end on Ubuntu 22.04 / kernel 6.6.87.2 (WSL2), 2026-07-30. 37 correctness checks
+       cross-referenced against df, free -m, nproc, /proc/meminfo and hostname - independent sources,
+       because a collector agreeing with itself proves nothing - plus 6 stimulus checks confirming
+       the counters MOVE: idle 0-2.7% -> 100% under an all-core burn with every core registering,
+       136 MB/s on a 200 MB fsynced write, 0.33 MB/s on a measured HTTPS pull.
+       WHAT THAT RUN COULD NOT EXERCISE: the host was a VM with no battery, no /sys/class/drm cards
+       and no thermal zones, so power(), gpuSys() and temps() were only proven to return null/false
+       correctly. Their POPULATED paths remain untested - which is why the entries they feed are
+       marked partial below rather than plain true. */
+    verified: 'end-to-end on Ubuntu 22.04 (kernel 6.6.87.2, WSL2): 37 correctness checks against ' +
+              'df/free/nproc + 6 stimulus checks. Battery, GPU and thermal paths were absent on ' +
+              'that host and are still unproven when populated.',
+    caps: {
+      /* temps ARE emitted by the plug, but the THERM page reads only t.sensors
+         (LibreHardwareMonitor). Measured-and-discarded is not a capability. */
+      'cpu.perCore': true, 'cpu.temps': false,
+      'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
+      /* perDevice is differenced inside the plug to build the aggregate, but no per-device rows
+         reach the tick, so nothing can consume it. */
+      'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': false,
+      /* perInterface and perDevice are COLLECTED in the plug but not yet emitted in the tick, and the
+         routes that would serve them are PowerShell. Collected-but-unreachable is not a capability. */
+      'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
+      'proc.list': true, 'proc.cpu': true, 'proc.mem': true, 'proc.io': 'partial', 'proc.faults': true,
+      'gpu.total': 'partial', 'gpu.perAdapter': 'partial', 'gpu.perProcess': false,
+      'power.battery': 'partial', 'power.rate': 'partial', 'power.health': 'partial',
+      /* ---- EVERYTHING BELOW IS FALSE BECAUSE THE CODE IS POWERSHELL, not because Linux cannot do
+         it. Linux can do all of it, and several would be easy. But a manifest describes what is
+         IMPLEMENTED, not what is possible - the previous values here were written from intent and
+         certified features that return 501 on this platform. Port the route, then flip the flag. ---- */
+      'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
+      'clip.history': false,
+      'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
+      'host.frameless': 'partial', 'host.tray': false,
+    },
+    notes: {
+      'cpu.temps': '/sys/class/thermal and hwmon, when the platform driver publishes them. Bare ' +
+                   'metal usually does; VMs and WSL usually do not. The absent case is verified; ' +
+                   'the present case has not been seen.',
+      'power.battery': 'Reads /sys/class/power_supply, handling both energy_* (uWh) and charge_* ' +
+                       '(uAh, needing voltage) driver conventions. The no-battery case is verified. ' +
+                       'A real laptop battery has not been read yet, so treat the first reading on ' +
+                       'one as unconfirmed and compare it against upower.',
+      'power.rate': 'Derived from power_now, or current_now x voltage_now where the driver reports ' +
+                    'amps instead of watts. Sign comes from status. Unverified on real hardware.',
+      'power.health': 'energy_full vs energy_full_design. Unverified on real hardware.',
+      'proc.io': '/proc/<pid>/io is readable only for your own processes unless running as root, ' +
+                 'so the I/O column covers your session, not the whole machine.',
+      'gpu.total': 'amdgpu and i915 publish utilisation through /sys; NVIDIA requires nvidia-smi. ' +
+                   'Whichever is absent is omitted rather than reported as zero.',
+      'gpu.perProcess': 'No vendor-neutral equivalent to the Windows GPU Engine counters exists.',
+      'scan.mft': 'Master File Table parsing is an NTFS feature. The growth scan replaces it here ' +
+                  'and walks the tree directly, which is slower but works on any filesystem.',
+      'scan.iotrace': 'Needs blktrace or eBPF, both of which require root and a kernel built for it.',
+      'clip.history': 'Requires a running X11 or Wayland session with xclip or wl-clipboard present.',
+      'act.elevate': 'pkexec when a polkit agent is running, otherwise sudo in a terminal.',
+      'host.frameless': 'No WebView2 equivalent. The panel opens in the default browser in app mode; ' +
+                        'edge-docking and always-on-top are the window manager\'s business, not ours.',
+    },
+  },
+
+  /* ---------------------------------------------------------------- macOS
+   * WRITTEN, NOT VERIFIED. There is no Mac on this bench, so every entry below is derived from
+   * documented tool output rather than observed behaviour, and the panel says so out loud.
+   *
+   * This is the honest state of a port nobody has run yet. It is shipped because a collector that
+   * announces its own untested status is more useful than no collector, and strictly more honest
+   * than one that pretends. The first person to run it on real hardware should correct this block
+   * and flip `verified`. */
+  darwin: {
+    name: 'macOS',
+    collector: 'collect/darwin.js (sysctl, vm_stat, iostat, pmset, ps)',
+    /* Still false, and it stays false until someone runs it on a Mac. What HAS been done is worth
+       stating precisely, because it is not nothing and it is also not verification:
+       collect/test-darwin-sim.js drives the entire collector from fixture text through an injection
+       seam and checks 64 things - the memory arithmetic, ps aggregation, netstat de-duplication,
+       mAh-to-watt-hour conversion with sign, rate differencing across ticks, null discipline, and
+       the tick contract. That suite found three real defects: installed RAM was read from two
+       different sources that could disagree, and the df parser located the mount point with
+       indexOf, which for the root volume matched "/dev/..." at index 0 and SILENTLY DROPPED THE
+       MAIN DISK. Both fixed.
+       So: the logic is tested, the format assumption is not. Only a Mac settles the latter. */
+    verified: false,
+    verifyNote: 'UNVERIFIED on hardware - written from documented tool output, never executed on a ' +
+                'Mac. The collector LOGIC is covered by 64 simulation checks (collect/test-darwin-sim.js), ' +
+                'but whether macOS really emits the assumed formats is untested. Run ' +
+                'collect/test-darwin-live.js and compare against Activity Monitor.',
+    caps: {
+      /* Corrected 2026-07-30 to match the CODE rather than the intent. Each false below was
+         previously true or partial while the implementation emitted nothing, emitted null, or did
+         not exist at all. The note beside each says which. */
+      'cpu.perCore': false, 'cpu.temps': false,
+      'mem.hardFaults': true, 'mem.committed': false, 'mem.cache': true,
+      'disk.perVolume': true, 'disk.io': 'partial', 'disk.perDevice': false,
+      'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
+      'proc.list': true, 'proc.cpu': 'partial', 'proc.mem': true, 'proc.io': false, 'proc.faults': false,
+      'gpu.total': false, 'gpu.perAdapter': false, 'gpu.perProcess': false,
+      'power.battery': true, 'power.rate': true, 'power.health': true,
+      /* PowerShell one-shots, same as Linux. Not a macOS limitation - an unported layer. */
+      'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
+      'clip.history': false,
+      'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
+      'host.frameless': 'partial', 'host.tray': false,
+    },
+    notes: {
+      'cpu.perCore': 'The plug emits an EMPTY cores array - the `iostat -c` per-core reading this ' +
+                     'note once promised was never implemented. Declared false so the per-thread ' +
+                     'wheel is hidden rather than pinned at "0% hottest" forever.',
+      'cpu.total': 'Comes from the iostat stream. If iostat is missing or has not yet emitted a ' +
+                   'data line, total is null rather than 0 - an idle-looking CPU is the one lie ' +
+                   'this tool must never tell.',
+      'mem.committed': 'Not implemented. macOS has no direct commit-charge equivalent and the ' +
+                       'anonymous-plus-swap approximation was never written, so the field is null.',
+      'proc.cpu': 'macOS `ps` reports %cpu relative to ONE core, so a saturated multi-threaded ' +
+                  'process can exceed 100. Normalised by core count to match the Windows and Linux ' +
+                  'scale, but this is unverified on hardware.',
+      'proc.faults': 'Not implemented - the plug emits 0 for every process, so the column is ' +
+                     'suppressed rather than shown as a machine where nothing ever faults.',
+      'disk.io': 'iostat gives COMBINED throughput only. Read/write split, busy percentage and ' +
+                 'queue depth are all null; only combinedMBs is real.',
+      'cpu.temps': 'Apple Silicon exposes thermals only through IOKit and powermetrics, and ' +
+                   'powermetrics requires root. Omitted rather than faked.',
+      'proc.io': 'Per-process disk I/O needs fs_usage, which requires root and disabling SIP on ' +
+                 'some releases. Not worth the cost.',
+      'gpu.total': 'Requires powermetrics (root) or a Metal counter addon. Omitted.',
+      'act.clean': 'Caches under ~/Library/Caches are safe to sweep. System caches are protected by ' +
+                   'SIP and are deliberately left alone.',
+      'host.frameless': 'Opens in the default browser in app mode. A native WKWebView host is ' +
+                        'possible but is a separate build with its own signing requirements.',
+    },
+  },
+};
+
+function platformKey(p = process.platform) {
+  return PLATFORMS[p] ? p : null;
+}
+
+/* The full manifest for the host we are actually on, plus the flat `can` map the panel gates on.
+   `partial` counts as available - the feature renders, and its note explains the limit. */
+function manifest(p = process.platform) {
+  const key = platformKey(p);
+  if (!key) {
+    return {
+      platform: p, name: p, supported: false, verified: false,
+      collector: 'none', caps: {}, can: {}, notes: {},
+      warning: `VITALS has no collector for "${p}". The panel will load but no telemetry will arrive.`,
+    };
+  }
+  const d = PLATFORMS[key];
+  const can = {};
+  for (const k of KEYS) can[k] = !!d.caps[k];
+  return {
+    platform: key, name: d.name, supported: true,
+    collector: d.collector,
+    verified: d.verified === false ? false : d.verified,
+    verifyNote: d.verifyNote || '',
+    caps: d.caps, can, notes: d.notes || {},
+    /* Everything this host cannot do, named. The panel shows this on the SELF page so the limits of
+       the current install are always one click away rather than discovered by confusion. */
+    missing: KEYS.filter((k) => !d.caps[k]),
+    limited: KEYS.filter((k) => d.caps[k] === 'partial'),
+  };
+}
+
+module.exports = { KEYS, PLATFORMS, manifest, platformKey };

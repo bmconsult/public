@@ -1,0 +1,16 @@
+{
+  "name": "vitals",
+  "version": "0.9.0",
+  "private": true,
+  "description": "A system monitor that measures the machine it runs on and explains what it finds.",
+  "//": "NO DEPENDENCIES, deliberately. node_modules does not exist and nothing should create it - the whole product is standard-library Node plus per-platform collectors. This file exists to carry the version and the scripts, not to pull anything in.",
+  "engines": { "node": ">=18.15.0" },
+  "main": "start.js",
+  "scripts": {
+    "start": "node start.js",
+    "headless": "node start.js --no-window",
+    "test": "node test-routes.js && node collect/test-linux.js && node collect/test-darwin.js && node collect/test-darwin-sim.js",
+    "test:linux": "node collect/test-linux-live.js && node collect/test-linux-stimulus.js",
+    "test:macos": "node collect/test-darwin-live.js"
+  }
+}
