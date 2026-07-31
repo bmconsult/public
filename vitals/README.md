@@ -132,14 +132,35 @@ actually produced telemetry before reporting success.
 This is version **0.9.0**, and pre-1.0 on purpose. The version number is doing the same job as
 everything else here: describing what was actually verified.
 
+Counts below come from the capability manifest itself, not from a summary of it — 33 capabilities,
+each declared per platform as measured, partial, or absent.
+
 | | Windows | Linux | macOS |
 |---|---|---|---|
-| Status | **Complete & measured** | **Verified end to end** | **Written, never run on real hardware** |
-| Live telemetry (CPU, memory, disk, network, processes, battery) | ✅ | ✅ | ⚠️ unverified |
-| GPU | ✅ per-adapter & per-process | partial, driver-dependent | ❌ (needs root) |
-| Diagnosis, history, journal | ✅ | ✅ | ⚠️ unverified |
-| Actions & scans (kill, clean, restart, startup scan, growth, MFT) | ✅ | ❌ not ported | ❌ not ported |
+| **Capabilities measured** | **32 of 33** | 11 measured · 7 partial | 9 measured · 3 partial |
+| **Verified** | on real hardware, daily | 37 parser + 6 stimulus checks, real hardware | **simulation only — never run on a Mac** |
+| CPU total | ✅ | ✅ | ✅ |
+| CPU per-core | ✅ | ✅ | ❌ |
+| Memory in use · cache · hard faults | ✅ | ✅ | ✅ |
+| Memory committed | ✅ | ✅ | ❌ |
+| Disk per volume | ✅ | ✅ | ✅ |
+| Disk I/O · per device | ✅ · ✅ | ✅ · ❌ | ⚠️ partial · ❌ |
+| Network rates | ✅ | ✅ | ✅ |
+| Network per interface · sockets | ✅ | ❌ | ❌ |
+| Processes: list · memory | ✅ | ✅ | ✅ |
+| Processes: CPU · I/O · faults | ✅ | ✅ · ⚠️ · ✅ | ⚠️ · ❌ · ❌ |
+| GPU | ✅ per-adapter & per-process | ⚠️ partial, driver-dependent | ❌ needs root |
+| Battery, including health | ✅ | ⚠️ partial | ✅ |
+| Diagnosis · history · journal | ✅ | ✅ | ✅ over the metrics it has |
+| Actions & scans (kill, clean, restart, startup, growth, MFT) | ✅ | ❌ not ported | ❌ not ported |
 | Frameless docking window | ✅ (x64) | browser window | browser window |
+
+**Read that as: Windows is the product. Linux and macOS are real ports, not stubs — you get live
+telemetry, the diagnosis engine, 90 days of history and the journal on all three — but they are
+partial, and only Windows can act on what it finds.** A Mac gives you CPU, memory, disk, network,
+processes and full battery health with diagnosis over all of it; it does not give you per-core CPU,
+GPU, or any of the action buttons. That is worth having and it is not parity, and the table says
+which is which rather than averaging them into a tick.
 
 - **Windows** is the reference implementation — every capability observed working on a real
   machine. One gap: Windows exposes no CPU temperature to unprivileged code, so temperature appears

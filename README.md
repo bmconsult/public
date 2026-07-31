@@ -59,8 +59,12 @@ The rest of the highlight reel, measured on the machine it was built on:
 
 <a href="vitals/"><img src="vitals/media/overview-dark.png" width="640" alt="The overview: CPU, memory, disk and GPU as rings — the bold arc is now, the ring's own track is that metric's last hour" /></a>
 
-Windows **complete and measured** · Linux **verified end to end** · macOS **written and simulated,
-waiting for its first real Mac** (the actions layer is Windows-only today). No installer, no
-service, no accounts, no telemetry · loopback only · Apache-2.0
+Windows is the product — **32 of 33 capabilities measured**. Linux and macOS are real ports but
+**partial ones**: live telemetry, the diagnosis engine, 90 days of history and the journal work on
+all three, but neither can act on what it finds, and macOS has **never run on a real Mac** —
+everything there is written and simulated. The project README breaks that down capability by
+capability rather than averaging it into a tick.
+
+No installer, no service, no accounts, no telemetry · loopback only · Apache-2.0
 
 **[Download](vitals/#download)** &nbsp;·&nbsp; **[Read more](vitals/)**
