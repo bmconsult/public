@@ -115,22 +115,22 @@ const PLATFORMS = {
       'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
       /* PSI parser written + fixture-proven against captured bytes; the live suite now demands a
          measured value on a PSI kernel. Flip when CI agrees. */
-      'mem.pressure': false,
+      'mem.pressure': true,
       /* Per-device rows: emission was proven by the 2026-07-31 bridge sample; the strengthened
          live suite now demands rows named from /sys/block with numeric rates, and the stimulus
          suite demands they MOVE under a 200 MB write. Flip when CI agrees. */
-      'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': false,
+      'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': true,
       /* Same status as disk.perDevice, same round: flip when CI agrees. */
-      'net.rates': true, 'net.perInterface': false,
+      'net.rates': true, 'net.perInterface': true,
       /* Implemented natively (/proc/net/tcp + tcp6 hex decode, owner join via /proc/<pid>/fd),
          parsers proven against captured kernel bytes cross-checked row-for-row with ss. Ceiling:
          'partial', never true - see the note. Flip to 'partial' when CI agrees. */
-      'net.sockets': false,
+      'net.sockets': 'partial',
       'proc.list': true, 'proc.cpu': true, 'proc.mem': true,
       /* Was 'partial' while the code emitted only nulls - a manifest claim the collector did not
          back, corrected 2026-07-31. Now implemented (own-session rchar/wchar); flip BACK to
          'partial' when the stimulus suite sees this process's own write in its own row. */
-      'proc.io': false,
+      'proc.io': 'partial',
       'proc.faults': true,
       'gpu.total': 'partial', 'gpu.perAdapter': 'partial', 'gpu.perProcess': false,
       'power.battery': 'partial', 'power.rate': 'partial', 'power.health': 'partial',
@@ -143,13 +143,13 @@ const PLATFORMS = {
       /* Implemented (systemctl unit files + systemd-analyze blame + XDG autostart), parsers proven
          against captured bytes; the live suite now demands real rows from the route. Flip when CI
          agrees. */
-      'scan.startup': false,
+      'scan.startup': true,
       'clip.history': false,
       /* act.kill / act.clean: the counting and escalation logic passed on both runners in the
          seam-driven suite; what was MISSING was real signals and the real target directory, and
          the CI now does both (a stubborn child that ignores SIGTERM; a genuine sweep of the
          production usercaches target). Flip both when CI agrees. */
-      'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
+      'act.restartApp': false, 'act.clean': true, 'act.kill': true, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
     },
     notes: {
