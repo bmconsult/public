@@ -85,81 +85,141 @@ const PLATFORMS = {
   linux: {
     name: 'Linux',
     collector: 'collect/linux.js (direct /proc and /sys reads, no subprocesses)',
-    /* Run end to end on Ubuntu 22.04 / kernel 6.6.87.2 (WSL2), 2026-07-30. 37 correctness checks
-       cross-referenced against df, free -m, nproc, /proc/meminfo and hostname - independent sources,
-       because a collector agreeing with itself proves nothing - plus 6 stimulus checks confirming
-       the counters MOVE: idle 0-2.7% -> 100% under an all-core burn with every core registering,
-       136 MB/s on a 200 MB fsynced write, 0.33 MB/s on a measured HTTPS pull.
-       WHAT THAT RUN COULD NOT EXERCISE: the host was a VM with no battery, no /sys/class/drm cards
-       and no thermal zones, so power(), gpuSys() and temps() were only proven to return null/false
-       correctly. Their POPULATED paths remain untested - which is why the entries they feed are
-       marked partial below rather than plain true. */
-    verified: 'end-to-end on Ubuntu 22.04 (kernel 6.6.87.2, WSL2): 37 correctness checks against ' +
-              'df/free/nproc + 6 stimulus checks. Battery, GPU and thermal paths were absent on ' +
-              'that host and are still unproven when populated.',
+    /* VERIFICATION HISTORY, because each round proved something the previous could not:
+       2026-07-30, Ubuntu 22.04 / kernel 6.6.87.2 (WSL2): 37 correctness checks against df, free,
+       nproc and /proc/meminfo, plus 6 stimulus checks (idle -> 100% all-core burn, 136 MB/s on a
+       fsynced write, a measured HTTPS pull). WSL is a VM with Windows interop that can mask
+       PowerShell dependencies, so:
+       2026-07-31, GitHub CI on REAL kernels - ubuntu-22.04 and ubuntu-24.04, both green: the same
+       parser + live + stimulus suites, the route guard, the action and inspection logic suites,
+       the growth walker over a real home, and a bridge boot serving a measured sample. That run
+       also CAPTURED the /proc bytes (net/tcp, pressure, systemctl, ss) that the sockets, startup
+       and PSI code below was then written against.
+       STILL UNPROVEN ANYWHERE: battery, populated GPU and thermal paths - every CI host is a VM
+       with none of the three, so those entries stay partial until a real Linux laptop reports. */
+    verified: 'end-to-end on real kernels in CI (ubuntu-22.04 + 24.04, 2026-07-31): parser ' +
+              'fixtures against captured /proc text, live cross-check against df/free/nproc, ' +
+              'stimulus checks that the counters move, growth walker over a real home, bridge ' +
+              'sample. Battery, GPU and thermal populated paths remain unproven - runners have ' +
+              'none of the three.',
+    /* THE FLIP-ON-GREEN LIST. Everything below marked "flip when CI agrees" was implemented
+       2026-07-31 against the captured bytes, with unconditional checks added to the CI suites -
+       written and verified are two separate acts, and the second happens by reading that run,
+       not by predicting it. When the next Linux CI run is green, flip: mem.pressure -> true,
+       disk.perDevice -> true, net.perInterface -> true, net.sockets -> 'partial',
+       proc.io -> 'partial', scan.startup -> true, act.kill -> true, act.clean -> true. */
     caps: {
       /* temps ARE emitted by the plug, but the THERM page reads only t.sensors
          (LibreHardwareMonitor). Measured-and-discarded is not a capability. */
       'cpu.perCore': true, 'cpu.temps': false,
       'mem.hardFaults': true, 'mem.committed': true, 'mem.cache': true,
-      /* /proc/pressure (PSI) exists on modern kernels, but no parser for it has been written. */
+      /* PSI parser written + fixture-proven against captured bytes; the live suite now demands a
+         measured value on a PSI kernel. Flip when CI agrees. */
       'mem.pressure': false,
-      /* per-device rows and per-interface rates are EMITTED in the tick as of 2026-07-31
-         (disk.devices, net.ifaces) - they were previously differenced inside the plug and
-         discarded. Still false: the emission has not been re-run on a Linux host, and a flag here
-         means verified, not written. Flip after the live suite sees them populated. */
+      /* Per-device rows: emission was proven by the 2026-07-31 bridge sample; the strengthened
+         live suite now demands rows named from /sys/block with numeric rates, and the stimulus
+         suite demands they MOVE under a 200 MB write. Flip when CI agrees. */
       'disk.perVolume': true, 'disk.io': true, 'disk.perDevice': false,
-      'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
-      'proc.list': true, 'proc.cpu': true, 'proc.mem': true, 'proc.io': 'partial', 'proc.faults': true,
+      /* Same status as disk.perDevice, same round: flip when CI agrees. */
+      'net.rates': true, 'net.perInterface': false,
+      /* Implemented natively (/proc/net/tcp + tcp6 hex decode, owner join via /proc/<pid>/fd),
+         parsers proven against captured kernel bytes cross-checked row-for-row with ss. Ceiling:
+         'partial', never true - see the note. Flip to 'partial' when CI agrees. */
+      'net.sockets': false,
+      'proc.list': true, 'proc.cpu': true, 'proc.mem': true,
+      /* Was 'partial' while the code emitted only nulls - a manifest claim the collector did not
+         back, corrected 2026-07-31. Now implemented (own-session rchar/wchar); flip BACK to
+         'partial' when the stimulus suite sees this process's own write in its own row. */
+      'proc.io': false,
+      'proc.faults': true,
       'gpu.total': 'partial', 'gpu.perAdapter': 'partial', 'gpu.perProcess': false,
       'power.battery': 'partial', 'power.rate': 'partial', 'power.health': 'partial',
       'power.wake': false,
-      /* ---- MOSTLY FALSE BECAUSE THE CODE IS POWERSHELL, not because Linux cannot do it. A
-         manifest describes what is IMPLEMENTED AND VERIFIED - the original values here were
-         written from intent and certified features that returned 501.
-         Three of these now have native implementations that the router serves on this platform:
-         scan.growth (growthscan.js walker), act.kill and act.clean (actions-posix.js). They stay
-         false until they have actually run on a Linux host - route reachable, capability
-         unclaimed. The rest remain unported. ---- */
-      'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
+      'scan.mft': false, 'scan.iotrace': false,
+      /* Verified 2026-07-31: CI walked a real runner home on ubuntu-22.04 AND 24.04 - dirs, files,
+         bytes and denials all counted, snapshot contract validated. The first Linux flag flipped
+         by a green run rather than written from intent. */
+      'scan.growth': true,
+      /* Implemented (systemctl unit files + systemd-analyze blame + XDG autostart), parsers proven
+         against captured bytes; the live suite now demands real rows from the route. Flip when CI
+         agrees. */
+      'scan.startup': false,
       'clip.history': false,
+      /* act.kill / act.clean: the counting and escalation logic passed on both runners in the
+         seam-driven suite; what was MISSING was real signals and the real target directory, and
+         the CI now does both (a stubborn child that ignores SIGTERM; a genuine sweep of the
+         production usercaches target). Flip both when CI agrees. */
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
     },
     notes: {
       'cpu.temps': '/sys/class/thermal and hwmon, when the platform driver publishes them. Bare ' +
-                   'metal usually does; VMs and WSL usually do not. The absent case is verified; ' +
-                   'the present case has not been seen.',
+                   'metal usually does; VMs, WSL and CI runners do not - the absent case is ' +
+                   'verified, the present case has never been seen and CANNOT be seen in CI.',
       'power.battery': 'Reads /sys/class/power_supply, handling both energy_* (uWh) and charge_* ' +
-                       '(uAh, needing voltage) driver conventions. The no-battery case is verified. ' +
-                       'A real laptop battery has not been read yet, so treat the first reading on ' +
-                       'one as unconfirmed and compare it against upower.',
+                       '(uAh, needing voltage) driver conventions. The no-battery case is verified ' +
+                       'on WSL and both CI runners. A real laptop battery has not been read yet - ' +
+                       'no CI host has one - so treat the first reading as unconfirmed and compare ' +
+                       'it against upower.',
       'power.rate': 'Derived from power_now, or current_now x voltage_now where the driver reports ' +
-                    'amps instead of watts. Sign comes from status. Unverified on real hardware.',
-      'power.health': 'energy_full vs energy_full_design. Unverified on real hardware.',
-      'proc.io': '/proc/<pid>/io is readable only for your own processes unless running as root, ' +
-                 'so the I/O column covers your session, not the whole machine.',
+                    'amps instead of watts. Sign comes from status. Unverifiable in CI; needs a ' +
+                    'real laptop.',
+      'power.health': 'energy_full vs energy_full_design. Unverifiable in CI; needs a real laptop.',
+      'power.wake': 'The honest source would be `systemd-inhibit --list` (names the pid holding ' +
+                    'each inhibitor, unprivileged). Its output is now captured by every CI run so ' +
+                    'a future parser can be written against real bytes; nothing is implemented yet.',
+      'proc.io': 'Own-session only, by kernel design: /proc/<pid>/io is mode 0400, so unelevated ' +
+                 'it reads for this user\'s processes and nobody else\'s - foreign rows are null, ' +
+                 'never zero. Counts rchar/wchar (all I/O the process issued, pipes and sockets ' +
+                 'included - the semantic twin of the Windows IO counters these columns mirror).',
+      'net.sockets': 'PARTIAL IS THE CEILING, not a stage: every TCP socket appears (read straight ' +
+                     'from /proc/net/tcp and tcp6), but unelevated the OWNER resolves only for ' +
+                     'this user\'s processes - /proc/<pid>/fd is unreadable for other users, and ' +
+                     'ss -tanp on the CI runner showed the identical limit. Windows answers every ' +
+                     'owner unprivileged; Linux answers root\'s sockets with pid null.',
       'gpu.total': 'amdgpu and i915 publish utilisation through /sys; NVIDIA requires nvidia-smi. ' +
-                   'Whichever is absent is omitted rather than reported as zero.',
-      'gpu.perProcess': 'No vendor-neutral equivalent to the Windows GPU Engine counters exists.',
-      'mem.pressure': '/proc/pressure/memory (PSI) is the kernel\'s own verdict and the right ' +
-                      'source; the parser has not been written yet.',
-      'scan.mft': 'Master File Table parsing is an NTFS feature. The growth walker ' +
-                  '(growthscan.js, POST /api/growthscan) replaces it here - slower, but it works ' +
-                  'on any filesystem.',
-      'scan.growth': 'Implemented: growthscan.js walks the tree and /api/growth diffs the ' +
-                     'snapshots. Not yet run on a Linux host, so unclaimed until it is.',
-      'act.kill': 'Implemented (SIGTERM, then SIGKILL for survivors, denials counted). Unverified ' +
-                  'on a Linux host.',
-      'act.clean': 'Implemented for user-owned targets (tmp, ~/.cache) with denials counted. No ' +
-                   'elevated targets: that needs polkit, see act.elevate.',
-      'scan.iotrace': 'Needs blktrace or eBPF, both of which require root and a kernel built for it.',
-      'clip.history': 'Requires a running X11 or Wayland session with xclip or wl-clipboard present.',
+                   'Whichever is absent is omitted rather than reported as zero. The populated ' +
+                   'path needs real GPU hardware no CI runner has.',
+      'gpu.perProcess': 'NEVER machine-wide without root: the Windows GPU Engine counters have no ' +
+                        'vendor-neutral Linux equivalent. (Modern kernels expose per-client ' +
+                        'engine time in /proc/<pid>/fdinfo for amdgpu/i915, but only for your own ' +
+                        'processes and only per-driver - and no CI host has the hardware to prove ' +
+                        'a parser, so none has been written.)',
+      'mem.pressure': '/proc/pressure/memory (PSI): {some, full} avg10 percentages - the share of ' +
+                      'recent time tasks stalled waiting for memory, the kernel\'s own verdict. ' +
+                      'Parser proven against captured bytes from both runners; absent PSI ' +
+                      '(pre-4.20, psi=0) yields null, never a fabricated calm.',
+      'scan.mft': 'NEVER: the Master File Table is an NTFS structure and Linux roots are ext4/' +
+                  'btrfs/xfs - there is nothing to parse, on any kernel, with any privilege. The ' +
+                  'growth walker (growthscan.js, POST /api/growthscan) is the replacement here: ' +
+                  'slower, filesystem-agnostic, and verified on this platform.',
+      'scan.iotrace': 'NEVER unelevated: per-process I/O tracing needs blktrace or eBPF, both ' +
+                      'root-only, and the bridge deliberately never runs privileged. An elevated ' +
+                      'one-shot could exist someday; it would be a different feature.',
+      'scan.startup': 'Three sources, all captured before parsing: systemd enabled unit files, ' +
+                      'systemd-analyze blame joined on as measured boot cost, and XDG autostart ' +
+                      '.desktop entries. Not covered: `systemctl --user` (needs a session bus a ' +
+                      'headless host lacks) and cron @reboot lines - absent, not guessed.',
+      'scan.growth': 'Verified 2026-07-31 on both CI runners: the walker walked a real home ' +
+                     '(dirs, files, denials all counted) and /api/growth diffs the snapshots.',
+      'act.kill': 'SIGTERM, then SIGKILL for survivors, denials counted. CI now proves it on real ' +
+                  'processes, including one that ignores SIGTERM. Flip when that run is green.',
+      'act.clean': 'User-owned targets (tmp, ~/.cache) with denials counted; CI now sweeps the ' +
+                   'real usercaches target. No elevated targets: that needs polkit, see ' +
+                   'act.elevate.',
+      'clip.history': 'Requires a running X11 or Wayland session with xclip or wl-clipboard - a ' +
+                      'thing no headless CI host has, so a watcher written today could not be ' +
+                      'verified today. Unwritten until it can be proven on a real desktop.',
+      'act.restartApp': 'Unimplemented: Linux has no LaunchServices - no reliable name-to-' +
+                        'relaunch-command resolution exists (a .desktop lookup is a guess, and ' +
+                        'relaunching a guess is worse than not relaunching).',
       'act.elevate': 'pkexec when a polkit agent is running, otherwise sudo in a terminal. Not ' +
                      'implemented: whether an agent is present decides everything, and that ' +
                      'cannot be written honestly from documentation.',
       'host.frameless': 'No WebView2 equivalent. The panel opens in the default browser in app mode; ' +
                         'edge-docking and always-on-top are the window manager\'s business, not ours.',
+      'host.tray': 'Only exists where a native host process draws it, and no Linux host has been ' +
+                   'built - this build has no tray, by fact rather than by omission.',
     },
   },
 

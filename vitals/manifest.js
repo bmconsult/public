@@ -78,6 +78,8 @@ const REPO_ONLY = [
 /* Fixtures the Linux parser suite reads. Captured kernel text, no personal content - but enumerated
    explicitly rather than copying the folder, because the folder they live in is history/. */
 const FIXTURES = ['stat.txt', 'meminfo.txt', 'diskstats.txt', 'net_dev.txt', 'uptime.txt',
-                  'cpuinfo.txt', 'vmstat.txt'];
+                  'cpuinfo.txt', 'vmstat.txt',
+                  /* PSI, captured from the 2026-07-31 ubuntu-24.04 CI run (kernel 6.17-azure) */
+                  'pressure_cpu.txt', 'pressure_memory.txt', 'pressure_io.txt'];
 
 module.exports = { FILES, REPO_ONLY, FIXTURES };

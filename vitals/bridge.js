@@ -354,7 +354,11 @@ const PORTED_ROUTES = {
        clip to clipwatch-posix.js. Same rule as the actions - route reachable, capability
        unclaimed until the CI live run sees real rows. */
     '/api/conns', '/api/startup', '/api/clip']),
-  linux: new Set(['/api/kill', '/api/clean']),   // restartApp needs osascript; no Linux equivalent yet
+  linux: new Set(['/api/kill', '/api/clean',
+    /* 2026-07-31: conns (native /proc/net/tcp + fd-inode join) and startup (systemctl + blame +
+       XDG autostart) in inspect-posix.js, written against CI-captured bytes. Route reachable,
+       capability unclaimed until the live run sees real rows - the same two-act split as darwin. */
+    '/api/conns', '/api/startup']),   // restartApp needs osascript; no Linux equivalent yet
 };
 const PORTED_HERE = PORTED_ROUTES[process.platform] || new Set();
 

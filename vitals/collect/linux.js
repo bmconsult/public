@@ -83,6 +83,41 @@ function majFaults() {
   return x ? +x[1] : null;
 }
 
+/* ---------------- pressure (PSI) ----------------
+ * /proc/pressure/memory is the kernel's own verdict on memory: the share of recent wall-clock time
+ * in which at least one task ("some") or every task ("full") was stalled waiting for it. It is the
+ * honest Linux twin of the macOS pressure level - a judgement, not a ratio we invented.
+ *
+ * Written against the CI capture from ubuntu-24.04 (kernel 6.17.0-1020-azure):
+ *     some avg10=0.00 avg60=0.00 avg300=0.00 total=2
+ *     full avg10=0.00 avg60=0.00 avg300=0.00 total=2
+ * The `full` line is absent for the cpu resource on older kernels, and the whole file is absent
+ * pre-4.20 or with psi=0 on the kernel command line - both yield null, never a fabricated calm. */
+function psiRead(resource) {
+  const txt = read('/proc/pressure/' + resource);
+  const m = /^some avg10=([\d.]+)/m.exec(txt);
+  if (!m || !Number.isFinite(+m[1])) return null;
+  const f = /^full avg10=([\d.]+)/m.exec(txt);
+  return { some: +m[1], full: f && Number.isFinite(+f[1]) ? +f[1] : null };
+}
+
+/* ---------------- self-attribution (FOOTPRINT page) ----------------
+ * On Windows this is a pid map over WebView2 children; here the whole instrument is ONE process -
+ * the collector runs inside bridge.js - and the window is the user's own browser, which is not ours
+ * to claim. So self is a single honestly-labelled component: cumulative utime+stime from
+ * /proc/self/stat (differenced by the caller like every other counter) and VmRSS from
+ * /proc/self/status. RSS, not private bytes - it includes shared pages, so if it errs it errs
+ * AGAINST us, which is the right direction for a self-report. */
+function selfStat() {
+  const raw = read('/proc/self/stat');
+  const close = raw.lastIndexOf(')');
+  if (close < 0) return null;
+  const f = raw.slice(close + 2).trim().split(/\s+/);
+  const ticks = (+f[11] || 0) + (+f[12] || 0);          // utime + stime, fields 14+15
+  const m = /^VmRSS:\s+(\d+) kB/m.exec(read('/proc/self/status'));
+  return { ticks, mb: m ? +m[1] / 1024 : null };
+}
+
 /* ---------------- disk I/O ----------------
  * Offsets counted from the FRONT (see the header note about discard/flush fields):
  *   [2] name  [5] sectors read  [9] sectors written  [11] I/Os in flight  [12] ms spent doing I/O
@@ -192,12 +227,26 @@ function procList(pageSize) {
     const rssPages = +f[21] || 0;      // field 24
     const key = name;
     let a = out.get(key);
-    if (!a) { a = { n: key, cpuTicks: 0, mb: 0, pf: 0, count: 0, pids: [] }; out.set(key, a); }
+    if (!a) { a = { n: key, cpuTicks: 0, mb: 0, pf: 0, count: 0, pids: [], ioR: 0, ioW: 0, ioN: 0 }; out.set(key, a); }
     a.cpuTicks += utime + stime;
     a.mb += (rssPages * pageSize) / 1048576;
     a.pf += majflt;
     a.count += 1;
     if (a.pids.length < 40) a.pids.push(+d);
+    /* Per-process I/O: /proc/<pid>/io is mode 0400, so it reads only for processes this user owns -
+       root sees everything, an unelevated bridge sees its session. rchar/wchar, NOT read_bytes/
+       write_bytes, for two paid-for reasons: (1) they are the semantic twin of the Windows
+       'IO Read/Write Bytes/sec' counters these columns were built on - all I/O the process issued,
+       pipes and sockets included, counted at the syscall; (2) buffered write_bytes is charged to
+       whichever task submits the bio, so background writeback lands on root's kworkers and the
+       column would silently under-report every process that does not fsync. ioN counts how many of
+       this name's pids were readable, so the differencer can tell "measured 0" from "not allowed". */
+    const io = read(`/proc/${d}/io`);
+    if (io) {
+      const r = /^rchar: (\d+)/m.exec(io);
+      const w = /^wchar: (\d+)/m.exec(io);
+      if (r && w) { a.ioR += +r[1]; a.ioW += +w[1]; a.ioN += 1; }
+    }
   }
   return out;
 }
@@ -312,6 +361,7 @@ function start(root, { onStatic, onTick, onError }) {
   let stopped = false, timer = null, tick = 0;
 
   let prevCpu = null, prevDisk = null, prevNet = null, prevProc = null, prevFaults = null;
+  let prevSelf = null;
   let prevAt = process.hrtime.bigint();
   let volCache = null;
 
@@ -352,12 +402,13 @@ function start(root, { onStatic, onTick, onError }) {
       const n = netdev();
       const faults = majFaults();
       const procs = procList(pageSize);
+      const sf = selfStat();
 
       /* First pass has no previous reading to difference against, so it establishes the baseline and
          emits nothing. Publishing a first tick built from cumulative-since-boot totals would show a
          machine that has been at 100% disk for three days. */
       if (!prevCpu) {
-        prevCpu = c; prevDisk = d; prevNet = n; prevProc = procs; prevFaults = faults;
+        prevCpu = c; prevDisk = d; prevNet = n; prevProc = procs; prevFaults = faults; prevSelf = sf;
         return;
       }
 
@@ -404,14 +455,19 @@ function start(root, { onStatic, onTick, onError }) {
       for (const [key, a] of procs) {
         const p = prevProc.get(key);
         const dTicks = p ? Math.max(0, a.cpuTicks - p.cpuTicks) : 0;
+        /* I/O is differenced ONLY when both ticks had readable counters for this name. A name whose
+           pids we cannot read (another user's) reports null, never 0 - the columns cover this
+           session, not the machine, and caps.js says so (proc.io partial). */
+        const hasIo = a.ioN > 0 && p && p.ioN > 0;
+        const dR = hasIo ? Math.max(0, a.ioR - p.ioR) : null;
+        const dW = hasIo ? Math.max(0, a.ioW - p.ioW) : null;
         procOut.push({
           n: a.n,
           mb: Math.round(a.mb),
           cpu: Math.round(((dTicks / HZ) / elapsed / os.cpus().length) * 1000) / 10,
-          /* Per-process byte counters live in /proc/<pid>/io, which is root-only for processes you
-             do not own. Rather than report a number covering only our own session and let it be read
-             as machine-wide, the I/O columns are omitted and caps.js declares proc.io as partial. */
-          ioMBs: null, rMBs: null, wMBs: null,
+          ioMBs: hasIo ? Math.round(((dR + dW) / 1048576) / elapsed * 100) / 100 : null,
+          rMBs: hasIo ? Math.round((dR / 1048576) / elapsed * 100) / 100 : null,
+          wMBs: hasIo ? Math.round((dW / 1048576) / elapsed * 100) / 100 : null,
           pf: a.pf, count: a.count, pids: a.pids,
         });
       }
@@ -419,6 +475,21 @@ function start(root, { onStatic, onTick, onError }) {
 
       const g = gpuSys();
       const cTemp = temps();
+
+      /* Self-attribution, the same formula as the Windows collector: CPU-time delta / wall delta /
+         logical threads. One component - the collector runs inside the bridge process here, and the
+         window is the user's own browser, which is not ours to claim (see selfStat's header). */
+      let selfOut = null;
+      if (sf && prevSelf) {
+        const sCpu = Math.round((((Math.max(0, sf.ticks - prevSelf.ticks) / HZ) / elapsed
+          / os.cpus().length) * 100) * 100) / 100;
+        const sMb = sf.mb != null ? Math.round(sf.mb) : 0;
+        selfOut = {
+          comps: [{ k: 'bridge', n: 1, cpu: sCpu, mb: sMb }],
+          cpu: sCpu, mb: sMb, n: 1,
+          scanAge: 0,     // the pid "map" is ourselves; it cannot go stale
+        };
+      }
 
       onTick({
         t: 'tick',
@@ -431,6 +502,10 @@ function start(root, { onStatic, onTick, onError }) {
           cacheMB: Math.round(((m.Cached || 0) + (m.Buffers || 0)) / 1024),
           pagesSec: (faults != null && prevFaults != null)
             ? Math.round(Math.max(0, faults - prevFaults) / elapsed) : null,
+          /* The kernel's verdict, not ours: {some, full} avg10 percentages from PSI. Same field the
+             darwin plug uses for its pressure LEVEL - the panel renders each platform's shape and
+             history records the numeric part. Null wherever PSI is absent or disabled. */
+          pressure: psiRead('memory'),
         },
         disk: {
           vols: volCache,
@@ -462,14 +537,11 @@ function start(root, { onStatic, onTick, onError }) {
         gpus: g,
         pwr: power(),
         temps: cTemp == null ? null : { cpu: cTemp },
-        /* NOT zeros. The FOOTPRINT page states "these numbers include the cost of producing this
-           page"; 0.00% cpu / 0 MB there is a measured-looking lie. Self-attribution rides the
-           Windows per-process counter read and has no equivalent here yet, so: null. */
-        self: null,
+        self: selfOut,
         up: Math.round((parseFloat(read('/proc/uptime')) / 3600) * 10) / 10,
       });
 
-      prevCpu = c; prevDisk = d; prevNet = n; prevProc = procs; prevFaults = faults;
+      prevCpu = c; prevDisk = d; prevNet = n; prevProc = procs; prevFaults = faults; prevSelf = sf;
     } catch (e) {
       onError('[metrics/linux] ' + e.message);
     }
@@ -480,4 +552,4 @@ function start(root, { onStatic, onTick, onError }) {
   return { stop() { stopped = true; clearInterval(timer); } };
 }
 
-module.exports = { start, _internal: { cpuStat, meminfo, diskstats, netdev, pctOf } };
+module.exports = { start, _internal: { cpuStat, meminfo, diskstats, netdev, pctOf, psiRead, selfStat } };

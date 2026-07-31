@@ -110,9 +110,49 @@ setTimeout(() => {
     t.disk.io.readMBs >= 0 && t.disk.io.writeMBs >= 0 && t.disk.io.busyPct >= 0);
   check('busyPct <= 100', t.disk.io.busyPct <= 100);
 
+  console.log('\n--- per-device rows (disk.perDevice) ---');
+  console.log('  ' + JSON.stringify(t.disk.devices));
+  /* The 2026-07-31 bridge sample proved these arrays are EMITTED; these checks demand the rows
+     themselves, cross-named against /sys/block - the last step before caps.js may say true. */
+  const wholeDisks = fs.readdirSync('/sys/block').filter((d) => !/^(loop|ram|zram|dm-|sr)/.test(d));
+  check('devices array is populated (this host has ' + wholeDisks.length + ' whole disks)',
+    Array.isArray(t.disk.devices) && t.disk.devices.length === wholeDisks.length,
+    `${t.disk.devices.length} rows`);
+  check('every device row is named from /sys/block, with numeric rates',
+    t.disk.devices.every((d) => wholeDisks.includes(d.id)
+      && d.readMBs >= 0 && d.writeMBs >= 0 && d.busyPct >= 0 && d.busyPct <= 100));
+
   console.log('\n--- network ---');
-  console.log(`  rx ${t.net.rxMBs} MB/s  tx ${t.net.txMBs} MB/s`);
+  console.log(`  rx ${t.net.rxMBs} MB/s  tx ${t.net.txMBs} MB/s   ifaces ${JSON.stringify(t.net.ifaces)}`);
   check('net rates non-negative', t.net.rxMBs >= 0 && t.net.txMBs >= 0);
+  /* Same promotion test for net.perInterface: rows present, named from /proc/net/dev, and every
+     rate either measured or null (a NIC's first sample) - never the string "undefined". */
+  const kernelNics = fs.readFileSync('/proc/net/dev', 'utf8').split('\n').slice(2)
+    .map((l) => (/^\s*([\w.@-]+):/.exec(l) || [])[1]).filter(Boolean)
+    .filter((n) => n !== 'lo' && !/^(docker|veth|br-|virbr)/.test(n));
+  check('ifaces array is populated (kernel shows ' + kernelNics.length + ' real NICs)',
+    Array.isArray(t.net.ifaces) && t.net.ifaces.length === kernelNics.length, `${t.net.ifaces.length} rows`);
+  check('every iface row named from /proc/net/dev, rates numeric or null',
+    t.net.ifaces.every((i) => kernelNics.includes(i.id)
+      && (i.rxMBs === null || i.rxMBs >= 0) && (i.txMBs === null || i.txMBs >= 0)));
+  check('a settled tick has MEASURED iface rates, not all-null',
+    t.net.ifaces.every((i) => i.rxMBs !== null && i.txMBs !== null));
+
+  console.log('\n--- pressure (PSI) ---');
+  console.log(`  mem.pressure: ${JSON.stringify(t.mem.pressure)}`);
+  if (fs.existsSync('/proc/pressure/memory')) {
+    check('PSI present on this kernel -> mem.pressure measured',
+      t.mem.pressure && typeof t.mem.pressure.some === 'number' && t.mem.pressure.some >= 0);
+  } else {
+    check('no PSI on this kernel -> mem.pressure null, never zero', t.mem.pressure === null);
+  }
+
+  console.log('\n--- self-attribution ---');
+  console.log(`  self: ${JSON.stringify(t.self)}`);
+  check('self measured: cpu is a number, mb > 0',
+    t.self && typeof t.self.cpu === 'number' && t.self.cpu >= 0 && t.self.mb > 0);
+  check('self has the one honest component (bridge), n=1',
+    t.self && Array.isArray(t.self.comps) && t.self.comps.length === 1 && t.self.comps[0].k === 'bridge');
 
   console.log('\n--- processes ---');
   console.log('  ' + t.proc.slice(0, 5).map((p) => `${p.n} ${p.mb}MB ${p.cpu}%`).join('  |  '));
@@ -120,10 +160,17 @@ setTimeout(() => {
   check('proc sorted by memory descending',
     t.proc.every((p, i) => i === 0 || t.proc[i - 1].mb >= p.mb));
   check('this node process appears', t.proc.some((p) => p.n === 'node'));
-  /* THE CORE HONESTY CHECK: fields this platform cannot measure must be null, never 0. A zero here
-     would be a fabricated measurement, which is the exact failure the whole caps design prevents. */
-  check('proc.io fields are NULL not 0 (root-only on Linux)',
-    t.proc.every((p) => p.ioMBs === null && p.rMBs === null && p.wMBs === null));
+  /* THE CORE HONESTY CHECK, updated for the 2026-07-31 own-session io: /proc/<pid>/io reads only
+     for this user's processes, so a row is either MEASURED (all three numbers, >= 0) or NULL (all
+     three) - and never a fabricated 0 standing in for "not allowed". */
+  check('proc.io per row: measured-or-null, never a plausible zero for a denied read',
+    t.proc.every((p) => (p.ioMBs === null && p.rMBs === null && p.wMBs === null)
+      || (p.ioMBs >= 0 && p.rMBs >= 0 && p.wMBs >= 0)));
+  const ownNode = t.proc.find((p) => p.n === 'node');
+  check('our own node processes carry measured io (same-uid is readable)',
+    ownNode && ownNode.ioMBs !== null, ownNode && JSON.stringify({ r: ownNode.rMBs, w: ownNode.wMBs }));
+  check('some rows are honestly null (root\'s processes are not ours to read)',
+    process.getuid && process.getuid() !== 0 ? t.proc.some((p) => p.ioMBs === null) : true);
 
   console.log('\n--- power / gpu / temps ---');
   console.log(`  pwr: ${JSON.stringify(t.pwr)}`);

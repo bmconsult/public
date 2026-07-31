@@ -19,6 +19,11 @@ const MAP = {
   '/proc/diskstats': 'diskstats.txt', '/proc/net/dev': 'net_dev.txt',
   '/proc/uptime': 'uptime.txt', '/proc/cpuinfo': 'cpuinfo.txt',
   '/proc/vmstat': 'vmstat.txt',
+  /* PSI fixtures are REAL bytes from the 2026-07-31 CI capture (ubuntu-24.04, kernel
+     6.17.0-1020-azure), where all three resources were populated - io hardest, because the runner
+     was mid-checkout. */
+  '/proc/pressure/cpu': 'pressure_cpu.txt', '/proc/pressure/memory': 'pressure_memory.txt',
+  '/proc/pressure/io': 'pressure_io.txt',
 };
 const realRead = fs.readFileSync;
 fs.readFileSync = function (p, ...rest) {
@@ -44,7 +49,7 @@ fs.accessSync = function (p, ...rest) {
 };
 
 const { _internal } = require('./linux');
-const { cpuStat, meminfo, diskstats, netdev, pctOf } = _internal;
+const { cpuStat, meminfo, diskstats, netdev, pctOf, psiRead } = _internal;
 
 let fails = 0;
 function check(label, got, want) {
@@ -112,6 +117,27 @@ check('loop devices excluded', Object.keys(d).some((k) => k.startsWith('loop')),
   check('read sectors summed ONCE per disk (3 x 2000)', total, 6000);
   MAP['/proc/diskstats'] = 'diskstats.txt';
   try { io.unlinkSync(dsPath); } catch {}
+}
+
+/* --- PSI, against the captured pressure files. The io fixture matters most: an earlier reading of
+   the capture suggested io came back empty, and these are the actual bytes proving it did not on
+   THIS kernel - while the parser must still answer null, never zero, wherever it truly is. --- */
+check('psi cpu some avg10', psiRead('cpu') && psiRead('cpu').some, 1.91);
+check('psi cpu full avg10', psiRead('cpu') && psiRead('cpu').full, 0);
+check('psi memory some avg10', psiRead('memory') && psiRead('memory').some, 0);
+check('psi io some avg10', psiRead('io') && psiRead('io').some, 6.17);
+check('psi io full avg10', psiRead('io') && psiRead('io').full, 5.31);
+check('absent PSI file -> null, never a fabricated calm', psiRead('nonexistent'), null);
+{
+  /* Older kernels publish no `full` line for cpu: some parses, full is null - not 0. */
+  const fs2 = require('fs');
+  const p = path.join(S, 'pressure-someonly.txt');
+  fs2.writeFileSync(p, 'some avg10=3.50 avg60=1.00 avg300=0.10 total=99\n');
+  MAP['/proc/pressure/someonly'] = 'pressure-someonly.txt';
+  const r = psiRead('someonly');
+  check('some-only PSI: some parsed', r && r.some, 3.5);
+  check('some-only PSI: full is null, not 0', r && r.full, null);
+  try { fs2.unlinkSync(p); } catch {}
 }
 
 /* --- network. eth0 rx 35635, tx 1012; lo must be excluded --- */

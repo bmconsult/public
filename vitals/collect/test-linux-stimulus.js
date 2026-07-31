@@ -123,6 +123,16 @@ function burnNet() {
   console.log(`  writeMBs: ${w.join(', ')}   busyPct: ${busy.join(', ')}`);
   check('writeMBs registered the write', Math.max(...w, 0) > 1, `peak ${Math.max(...w, 0)} MB/s`);
   check('busyPct registered the write', Math.max(...busy, 0) > 0, `peak ${Math.max(...busy, 0)}%`);
+  /* PER-PROCESS attribution of the same stimulus: the 200 MB was written by THIS process, so the
+     aggregated `node` row's own-session wMBs (from /proc/self-uid /proc/<pid>/io, wchar) must
+     register it. This is what promotes proc.io from written to verified. */
+  const nodeW = since(m).map((t) => { const p = (t.proc || []).find((x) => x.n === 'node'); return p && p.wMBs != null ? p.wMBs : 0; });
+  check('the node row\'s OWN wMBs registered the write (proc.io attribution)',
+    Math.max(...nodeW, 0) > 1, `peak ${Math.max(...nodeW, 0)} MB/s`);
+  /* And the whole-machine per-device rows moved with it. */
+  const devW = since(m).map((t) => Math.max(0, ...(t.disk.devices || []).map((d) => d.writeMBs)));
+  check('a per-device row registered the write (disk.perDevice)',
+    Math.max(...devW, 0) > 1, `peak ${Math.max(...devW, 0)} MB/s`);
 
   await new Promise((r) => setTimeout(r, 1500));
 
@@ -134,6 +144,10 @@ function burnNet() {
   console.log(`  fetched ${(bytes / 1048576).toFixed(2)} MB   rxMBs: ${rx.join(', ')}`);
   if (bytes > 200000) {
     check('rxMBs registered the download', Math.max(...rx, 0) > 0, `peak ${Math.max(...rx, 0)} MB/s`);
+    /* Per-NIC attribution of the same pull (net.perInterface): some interface's own rx moved. */
+    const ifRx = since(m).map((t) => Math.max(0, ...(t.net.ifaces || []).map((i) => i.rxMBs || 0)));
+    check('a per-interface row registered the download', Math.max(...ifRx, 0) > 0,
+      `peak ${Math.max(...ifRx, 0)} MB/s`);
   } else {
     console.log('  SKIP  network check - fetched too little to be measurable');
   }

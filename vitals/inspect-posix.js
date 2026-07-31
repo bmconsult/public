@@ -6,8 +6,9 @@
  *
  * These are the READ half of what actions-posix.js is to actions: routes that bridge.js implements
  * as PowerShell one-shots (`SCRIPTS.conns`, `SCRIPTS.startup`), reimplemented natively so the SYS
- * socket card and the BOOT page work on macOS. Same route contracts, same row shapes, so the page
- * does not need a platform branch.
+ * socket card and the BOOT page work on macOS and Linux. Same route contracts, same row shapes, so
+ * the page does not need a platform branch. The macOS half shells out (netstat, plutil); the Linux
+ * half reads /proc directly for sockets and shells out once for the startup scan.
  *
  * UNVERIFIED ON HARDWARE. Every parser below is written from documented tool output, the exact
  * practice that has produced every previous macOS defect in this project - which is why each one
@@ -22,6 +23,7 @@
  */
 
 const os = require('os');
+const fs = require('fs');
 const { execFile } = require('child_process');
 
 /* THE INJECTION SEAM, same pattern as collect/darwin.js: all knowledge of the machine arrives as
@@ -78,7 +80,116 @@ function parseNetstatAnv(netTxt, names) {
   return rows;
 }
 
+/* ---------------- Linux sockets: /proc/net/tcp + tcp6, read directly ----------------
+ *
+ * No subprocess: the kernel publishes every TCP socket as hex text, and the pid join comes from
+ * readlink over /proc/<pid>/fd - the same source `ss -tanp` uses. Written against the CI capture
+ * from ubuntu-24.04 (kernel 6.17.0-1020-azure), cross-checked row for row against the ss output
+ * captured beside it: 3500007F:0035 is 127.0.0.53:53, DB01010A:958C<->E0CA4B14:01BB is
+ * 10.1.1.219:38284 <-> 20.75.202.224:443 ESTAB, and 0000000000000000FFFF0000DB01010A:CF50 is
+ * [::ffff:10.1.1.219]:53072.
+ *
+ * THE OWNERSHIP CEILING, verified in that same capture: /proc/<pid>/fd is readable only for your
+ * own processes, and ss -tanp shows the identical limit - its Process column was populated for the
+ * runner user's own pids (hosted-compute, Runner.Listener) and empty for root's sshd and
+ * systemd-resolved. So unelevated, the owner join covers this session; every OTHER socket still
+ * appears, with pid null rather than dropped - hiding root's listeners would defeat the card
+ * ("what is talking"). This is why caps.js will call net.sockets partial here, where Windows
+ * (Get-NetTCPConnection names every owner unprivileged) is true. */
+
+const TCP_STATES = { '0A': 'Listen', '01': 'Established', '06': 'TimeWait', '08': 'CloseWait', '02': 'SynSent' };
+
+function hexV4(h) {
+  /* 8 hex chars, one 32-bit word in LITTLE-endian byte order: DB01010A -> 10.1.1.219 */
+  const b = [];
+  for (let i = 6; i >= 0; i -= 2) b.push(parseInt(h.slice(i, i + 2), 16));
+  return b.join('.');
+}
+
+function hexV6(h) {
+  /* 32 hex chars: four 32-bit words, each word's BYTES reversed (little-endian within the word).
+     Rendered like ss renders it: v4-mapped addresses as ::ffff:a.b.c.d, else grouped hex with the
+     longest zero run compressed. */
+  const bytes = [];
+  for (let w = 0; w < 4; w++) {
+    for (let i = 6; i >= 0; i -= 2) bytes.push(parseInt(h.slice(w * 8 + i, w * 8 + i + 2), 16));
+  }
+  if (bytes.slice(0, 10).every((x) => x === 0) && bytes[10] === 255 && bytes[11] === 255) {
+    return '::ffff:' + bytes.slice(12).join('.');
+  }
+  const groups = [];
+  for (let i = 0; i < 16; i += 2) groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
+  /* longest run of zero groups -> '::' (prefer the first of equal runs, like inet_ntop) */
+  let best = -1, bestLen = 0;
+  for (let i = 0; i < 8; i++) {
+    if (groups[i] !== '0') continue;
+    let j = i; while (j < 8 && groups[j] === '0') j++;
+    if (j - i > bestLen) { best = i; bestLen = j - i; }
+    i = j;
+  }
+  if (bestLen < 2) return groups.join(':');
+  return groups.slice(0, best).join(':') + '::' + groups.slice(best + bestLen).join(':');
+}
+
+function parseProcNetTcp(txt, v6) {
+  const lines = String(txt || '').split('\n');
+  /* Shape gate: the header names the columns we index. A kernel that changes this file changes
+     everything downstream, so refuse rather than misread. */
+  if (!lines.length || !/local_address/.test(lines[0]) || !/inode/.test(lines[0])) return null;
+  const addr = (a) => {
+    const i = a.lastIndexOf(':');
+    return (v6 ? hexV6(a.slice(0, i)) : hexV4(a.slice(0, i))) + ':' + parseInt(a.slice(i + 1), 16);
+  };
+  const rows = [];
+  for (const line of lines.slice(1)) {
+    const p = line.trim().split(/\s+/);
+    if (p.length < 10) continue;
+    const st = TCP_STATES[p[3]];
+    if (!st) continue;                         // states the Windows card also omits
+    rows.push({ l: addr(p[1]), r: addr(p[2]), st, inode: +p[9] || 0 });
+  }
+  return rows;
+}
+
+/* socket inode -> owning pid, for every pid whose /proc/<pid>/fd this user may read. */
+function ownSocketInodes() {
+  const map = new Map();
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)); } catch { return map; }
+  for (const d of pids) {
+    let fds;
+    try { fds = fs.readdirSync(`/proc/${d}/fd`); } catch { continue; }   // not ours: the ceiling above
+    for (const fd of fds) {
+      try {
+        const m = /^socket:\[(\d+)\]$/.exec(fs.readlinkSync(`/proc/${d}/fd/${fd}`));
+        if (m) map.set(+m[1], +d);
+      } catch { /* fd closed between readdir and readlink */ }
+    }
+  }
+  return map;
+}
+
+function linuxConns(cb) {
+  let tcp4, tcp6;
+  try { tcp4 = fs.readFileSync('/proc/net/tcp', 'utf8'); } catch { tcp4 = ''; }
+  try { tcp6 = fs.readFileSync('/proc/net/tcp6', 'utf8'); } catch { tcp6 = ''; }
+  const r4 = parseProcNetTcp(tcp4, false);
+  const r6 = parseProcNetTcp(tcp6, true);
+  if (r4 === null && r6 === null) {
+    return cb(new Error('/proc/net/tcp did not have the expected header; refusing to guess at columns'));
+  }
+  const owners = ownSocketInodes();
+  const rows = [...(r4 || []), ...(r6 || [])].map((row) => {
+    const pid = owners.get(row.inode) || null;
+    let pn = null;
+    if (pid) { try { pn = fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim() || null; } catch {} }
+    return { l: row.l, r: row.r, st: row.st, pid, pn };
+  });
+  cb(null, rows);
+}
+
 function conns(cb) {
+  if (process.platform === 'linux') return linuxConns(cb);
   if (process.platform !== 'darwin') return cb(new Error('sockets-with-owners is not ported to ' + process.platform));
   sh('netstat -anv -p tcp 2>/dev/null; echo "---PS---"; ps -Ao pid,comm', (out) => {
     const [netTxt = '', psTxt = ''] = String(out || '').split('---PS---');
@@ -158,7 +269,118 @@ function parseStartup(out) {
   return { rows, loginNote };
 }
 
+/* ---------------- Linux startup scan ----------------
+ *
+ * Three sources, every one written against the CI capture rather than documentation:
+ *   kind 'service'  systemctl list-unit-files --type=service --state=enabled  (what boots)
+ *                   joined to systemd-analyze blame                           (what it COST)
+ *   kind 'login'    /etc/xdg/autostart and ~/.config/autostart .desktop files (desktop session)
+ * Mapped onto the same row contract as the Windows and macOS scans, and onto kinds the BOOT page
+ * already draws ('service', 'login') - a new kind would be counted in the total yet rendered
+ * nowhere, which is how a scan looks like it lost entries.
+ *
+ * NOT covered, on purpose: `systemctl --user` needs a user session bus a headless box lacks, and
+ * cron @reboot lines were not in the capture - both are absent rather than guessed at. The blame
+ * join is best-effort: on a long-running box systemd-analyze may refuse ("still running") and the
+ * rows simply carry no cost, which is a missing enrichment, not a missing entry. */
+
+function parseUnitFiles(txt) {
+  const lines = String(txt || '').split('\n');
+  if (!lines.some((l) => /^UNIT FILE\s+STATE/.test(l))) return null;   // shape gate: refuse, never guess
+  const out = [];
+  for (const l of lines) {
+    const m = /^(\S+\.(?:service|timer))\s+(enabled|enabled-runtime)\b/.exec(l.trim());
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+function parseBlame(txt) {
+  /* "14.844s primer.service" / " 1min 2.3s foo.service" / "820ms bar.service" */
+  const cost = new Map();
+  for (const l of String(txt || '').split('\n')) {
+    const m = /^\s*(?:(\d+)min\s+)?([\d.]+)(ms|s)\s+(\S+)\s*$/.exec(l);
+    if (!m) continue;
+    const secs = (m[1] ? +m[1] * 60 : 0) + (+m[2]) * (m[3] === 'ms' ? 0.001 : 1);
+    cost.set(m[4], Math.round(secs * 1000) / 1000);
+  }
+  return cost;
+}
+
+function parseDesktopEntry(txt) {
+  /* freedesktop .desktop: INI-ish, [Desktop Entry] section. First occurrence of each key wins. */
+  const get = (k) => {
+    const m = new RegExp('^' + k + '=(.*)$', 'm').exec(String(txt || ''));
+    return m ? m[1].trim() : '';
+  };
+  return {
+    name: get('Name'),
+    exec: get('Exec'),
+    disabled: /^true$/i.test(get('Hidden')) || /^false$/i.test(get('X-GNOME-Autostart-enabled')),
+  };
+}
+
+function parseLinuxStartup(out) {
+  const rows = [];
+  let units = null, blame = new Map();
+  const sections = String(out || '').split(/^=====/m);
+  for (const s of sections) {
+    if (s.startsWith('UNITS')) units = parseUnitFiles(s.slice('UNITS'.length));
+    else if (s.startsWith('BLAME')) blame = parseBlame(s.slice('BLAME'.length));
+    else if (s.startsWith('DESKTOP ')) {
+      const nl = s.indexOf('\n');
+      const file = s.slice('DESKTOP '.length, nl).trim();
+      const d = parseDesktopEntry(s.slice(nl + 1));
+      rows.push({
+        kind: 'login',
+        where: file.startsWith(os.homedir()) ? 'UserAutostart' : 'XDGAutostart',
+        name: d.name || (file.split('/').pop() || file).replace(/\.desktop$/, ''),
+        cmd: d.exec,
+        state: d.disabled ? 'disabled' : 'enabled',
+        suspect: SUSPECT_RE.test(d.exec),
+      });
+    }
+  }
+  for (const u of units || []) {
+    const secs = blame.get(u);
+    rows.push({
+      kind: 'service', where: 'systemd', name: u,
+      /* cmd carries the measured boot cost where systemd measured one - the question a BOOT page
+         answers is "what is this costing me", and blame is the kernel-adjacent truth of it. */
+      cmd: secs != null ? `${secs}s at boot` : '',
+      state: 'enabled', suspect: false,
+    });
+  }
+  return { rows, unitsParsed: units !== null };
+}
+
+function linuxStartup(cb) {
+  const cmd = `
+echo "=====UNITS"
+systemctl list-unit-files --type=service --state=enabled --no-pager 2>/dev/null
+echo "=====BLAME"
+systemd-analyze blame --no-pager 2>/dev/null
+for d in /etc/xdg/autostart "$HOME/.config/autostart"; do
+  for f in "$d"/*.desktop; do
+    [ -e "$f" ] || continue
+    printf '=====DESKTOP %s\\n' "$f"
+    cat "$f" 2>/dev/null
+    echo
+  done
+done`;
+  sh(cmd, (out) => {
+    const { rows, unitsParsed } = parseLinuxStartup(out);
+    if (!rows.length && !unitsParsed) {
+      /* systemctl absent or unrecognised AND no autostart files: refuse rather than render a
+         fabricated "nothing starts here" over what is actually an unreadable machine. */
+      return cb(new Error('systemctl did not answer and no autostart entries were found; this does not look like a systemd host'));
+    }
+    cb(null, rows, null);
+  });
+}
+
 function startup(cb) {
+  if (process.platform === 'linux') return linuxStartup(cb);
   if (process.platform !== 'darwin') return cb(new Error('the startup scan is not ported to ' + process.platform));
   const cmd = `
 for d in "$HOME/Library/LaunchAgents" "/Library/LaunchAgents" "/Library/LaunchDaemons"; do
@@ -185,5 +407,10 @@ osascript -e 'tell application "System Events" to get the name of every login it
 
 module.exports = {
   conns, startup, _inject,
-  _internal: { parseNetstatAnv, parseStartup, parseLaunchctlList, addrPort, SUSPECT_RE, STATE_MAP },
+  _internal: {
+    parseNetstatAnv, parseStartup, parseLaunchctlList, addrPort, SUSPECT_RE, STATE_MAP,
+    /* linux */
+    parseProcNetTcp, hexV4, hexV6, parseUnitFiles, parseBlame, parseDesktopEntry,
+    parseLinuxStartup, TCP_STATES,
+  },
 };

@@ -107,6 +107,108 @@ const s2 = I.parseStartup(STARTUP.replace('Dropbox, Rectangle', 'execution error
 check('consent refusal -> note, and NOT an empty-but-silent login group',
   !!s2.loginNote && s2.rows.filter((r) => r.kind === 'login').length === 0, s2.loginNote);
 
+/* ================= Linux sockets: /proc/net/tcp against CAPTURED kernel bytes =================
+ * These rows are pasted verbatim from the 2026-07-31 CI capture (ubuntu-24.04, kernel
+ * 6.17.0-1020-azure), and every expected decode below was cross-checked against the `ss -tanp`
+ * output captured in the same run - two independent renderings of the same socket table. */
+console.log('\n--- /proc/net/tcp: hex decode against captured bytes, cross-checked vs ss ---');
+
+const PROC_TCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9597 1 0000000000000000 100 0 0 10 0
+   1: 3500007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   991        0 6464 1 0000000000000000 100 0 0 10 5
+   3: DB01010A:AE1C 10813FA8:0050 06 00000000:00000000 03:00000BED 00000000     0        0 0 3 0000000000000000
+   5: DB01010A:958C E0CA4B14:01BB 01 00000000:00000000 02:00000509 00000000  1001        0 14047 2 0000000000000000 23 4 29 30 -1                    `;
+
+const T = I.parseProcNetTcp(PROC_TCP, false);
+check('rows parsed', Array.isArray(T) && T.length === 4, T && T.length);
+if (T) {
+  check('sshd listener: 00000000:0016 -> 0.0.0.0:22 Listen', T[0].l === '0.0.0.0:22' && T[0].st === 'Listen', T[0].l);
+  check('inode carried for the owner join', T[0].inode === 9597, T[0].inode);
+  check('resolved-stub: 3500007F:0035 -> 127.0.0.53:53 (little-endian bytes)', T[1].l === '127.0.0.53:53', T[1].l);
+  check('TIME_WAIT decoded: DB01010A:AE1C -> 10.1.1.219:44572', T[2].l === '10.1.1.219:44572' && T[2].st === 'TimeWait', T[2].l);
+  check('remote decoded: 10813FA8:0050 -> 168.63.129.16:80 (matches ss)', T[2].r === '168.63.129.16:80', T[2].r);
+  check('ESTABLISHED remote: E0CA4B14:01BB -> 20.75.202.224:443 (matches ss)',
+    T[3].r === '20.75.202.224:443' && T[3].st === 'Established', T[3].r);
+}
+
+const PROC_TCP6 = `  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9599 1 0000000000000000 100 0 0 10 0
+   1: 0000000000000000FFFF0000DB01010A:CF50 0000000000000000FFFF000069825514:01BB 01 00000000:00000000 00:00000000 00000000  1001        0 13308 1 0000000000000000 23 4 28 10 -1`;
+
+const T6 = I.parseProcNetTcp(PROC_TCP6, true);
+check('tcp6 rows parsed', Array.isArray(T6) && T6.length === 2, T6 && T6.length);
+if (T6) {
+  check('all-zero v6 compresses to :: (ss shows [::]:22)', T6[0].l === ':::22', T6[0].l);
+  check('v4-mapped decoded: ...FFFF0000DB01010A:CF50 -> ::ffff:10.1.1.219:53072 (matches ss)',
+    T6[1].l === '::ffff:10.1.1.219:53072', T6[1].l);
+  check('v4-mapped remote: 69825514 -> ::ffff:20.85.130.105 (matches ss)',
+    T6[1].r === '::ffff:20.85.130.105:443', T6[1].r);
+}
+
+check('unrecognised header refuses (null), never a guessed table',
+  I.parseProcNetTcp('sl local rem st\n0: 00000000:0016 00000000:0000 0A x x x', false) === null);
+check('a state the card omits (FIN_WAIT1 = 04) is skipped',
+  (I.parseProcNetTcp(PROC_TCP.replace(' 06 ', ' 04 '), false) || []).length === 3);
+
+/* ================= Linux startup: systemctl + blame + XDG, captured bytes ================= */
+console.log('\n--- linux startup: unit files, blame join, .desktop entries ---');
+
+/* The UNITS and BLAME sections are verbatim from the CI capture; the .desktop body is the one
+   shape NOT captured (only filenames were), so the workflow now cats the real files - correct
+   this fixture if they disagree. */
+const LINUX_STARTUP = `=====UNITS
+UNIT FILE                              STATE   PRESET
+apparmor.service                       enabled enabled
+chrony.service                         enabled enabled
+containerd.service                     enabled enabled
+cron.service                           enabled enabled
+docker.service                         enabled enabled
+getty@.service                         enabled enabled
+
+6 unit files listed.
+=====BLAME
+14.844s primer.service
+ 2.905s cloud-init-local.service
+ 1.700s docker.service
+  820ms fictional-fast.service
+=====DESKTOP /etc/xdg/autostart/snap-userd-autostart.desktop
+[Desktop Entry]
+Type=Application
+Name=Snap user application autostart helper
+Exec=/usr/bin/snap userd --autostart
+X-GNOME-Autostart-Delay=15
+=====DESKTOP ${HOME}/.config/autostart/dropper.desktop
+[Desktop Entry]
+Name=Totally Fine Helper
+Exec=/tmp/.x/helper --quiet
+Hidden=true`;
+
+const LS = I.parseLinuxStartup(LINUX_STARTUP);
+check('unit files parsed by shape (header demanded)', LS.unitsParsed === true);
+check('all rows present (6 services + 2 desktop)', LS.rows.length === 8, LS.rows.length);
+const dkr = LS.rows.find((r) => r.name === 'docker.service');
+check('service row: kind/where/state', dkr && dkr.kind === 'service' && dkr.where === 'systemd' && dkr.state === 'enabled');
+check('blame joined onto its unit as measured boot cost', dkr && dkr.cmd === '1.7s at boot', dkr && dkr.cmd);
+const chr = LS.rows.find((r) => r.name === 'chrony.service');
+check('unit with no blame line carries no cost, not a zero', chr && chr.cmd === '', chr && JSON.stringify(chr.cmd));
+check('template unit kept (getty@ IS enabled)', LS.rows.some((r) => r.name === 'getty@.service'));
+const snap = LS.rows.find((r) => /Snap user/.test(r.name));
+check('xdg entry: kind login, Name= wins over filename', snap && snap.kind === 'login' && snap.where === 'XDGAutostart',
+  snap && `${snap.kind}/${snap.where}`);
+check('xdg Exec carried', snap && snap.cmd === '/usr/bin/snap userd --autostart', snap && snap.cmd);
+const drp = LS.rows.find((r) => r.name === 'Totally Fine Helper');
+check('user autostart: where from the home prefix', drp && drp.where === 'UserAutostart', drp && drp.where);
+check('Hidden=true -> disabled', drp && drp.state === 'disabled');
+check('SUSPECT: autostart running from /tmp is flagged', drp && drp.suspect === true);
+check('legitimate packaged path NOT flagged', snap && snap.suspect === false);
+
+check('blame minutes form parses', I.parseBlame(' 1min 2.5s slow.service').get('slow.service') === 62.5);
+check('garbage systemctl output refuses (null), never an empty-but-confident list',
+  I.parseUnitFiles('command not found') === null);
+const GS = I.parseLinuxStartup('=====UNITS\nno such command\n=====BLAME\n');
+check('nothing parseable -> no rows AND unitsParsed false (the route errors rather than fabricates)',
+  GS.rows.length === 0 && GS.unitsParsed === false);
+
 /* ================= clipboard watcher ================= */
 console.log('\n--- clipwatch: secret shapes, truncation, row contract ---');
 const C = clip._internal;

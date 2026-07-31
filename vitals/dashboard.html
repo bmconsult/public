@@ -2357,15 +2357,24 @@ RENDER.mem=()=>{
   $('#cmB').style.width=hasCommit?(num(t.mem.committedMB)/mxc*100)+'%':'0%';
   $('#cmB').style.opacity=hasCommit?'':'.25';
   $('#inB').style.width=(num(t.mem.totalMB)/mxc*100)+'%';
-  /* The kernel's own memory VERDICT (macOS pressure level: 1 normal / 2 warning / 4 critical) -
-     a better answer to "do I need more RAM" than any percentage. Capability-gated AND null-gated:
-     the row exists only where the platform is verified to measure it, and never invents a value. */
+  /* The kernel's own memory VERDICT - a better answer to "do I need more RAM" than any percentage.
+     Two platform shapes, each rendered as itself: darwin sends Apple's discrete level (1 normal /
+     2 warning / 4 critical), linux sends PSI {some, full} - the percentage of the last 10s in
+     which tasks stalled waiting for memory. Capability-gated AND null-gated: the row exists only
+     where the platform is verified to measure it, and never invents a value. The colour tiers on
+     the linux branch are presentation thresholds on a measured number, not fabricated data: full>1%
+     means the WHOLE machine spent real time stopped for memory. */
   {const pr=t.mem.pressure, prRow=$('#pressRow');
    const show=can('mem.pressure')&&pr!=null;
    if(prRow){ prRow.style.display=show?'':'none';
      if(show){ const v=$('#pressV');
-       v.textContent=pr===1?'normal':pr===2?'warning':pr===4?'critical':String(pr);
-       v.style.color=pr===4?'var(--crit)':pr===2?'var(--warn)':'var(--ok)'; } }}
+       if(typeof pr==='object'){
+         const some=(typeof pr.some==='number')?pr.some:0;
+         v.textContent=some.toFixed(1)+'% stalled';
+         v.style.color=(pr.full>1)?'var(--crit)':(some>5)?'var(--warn)':'var(--ok)';
+       }else{
+         v.textContent=pr===1?'normal':pr===2?'warning':pr===4?'critical':String(pr);
+         v.style.color=pr===4?'var(--crit)':pr===2?'var(--warn)':'var(--ok)'; } } }}
   // 12 rows fits 1240x820 with margin; 14 clipped the last row. The rest of the ~380 processes
   // live behind "Show all" — an on-demand snapshot, never on the 1 Hz tick (the stream carries
   // only the top 16 by design; see /api/processes in bridge.js).
@@ -4338,6 +4347,8 @@ RENDER.boot=async()=>{
       ${sus.map(x=>`<div style="font-size:11.5px"><b>${x.name}</b> <span class="muted" style="font-size:10.5px;word-break:break-all">· ${x.cmd}</span></div>`).join('')}
       <div class="why" style="margin-top:6px">${(S.caps&&S.caps.platform)==='darwin'
         ?`<b>/tmp</b>, <b>Downloads</b> and <b>/Users/Shared</b> are world-writable or routinely wiped, so legitimate software never installs there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>codesign -dv --verbose=2 '&lt;path&gt;'</code> — a valid signature from the expected developer means stale, not hostile; remove the entry and move on.`
+        :(S.caps&&S.caps.platform)==='linux'
+        ?`<b>/tmp</b> and <b>Downloads</b> are world-writable or routinely wiped, so packaged software never runs from there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>dpkg -S '&lt;path&gt;'</code> (or <code>rpm -qf</code>) — a file owned by an installed package means stale, not hostile; remove the entry and move on.`
         :`<b>Temp</b>, <b>Downloads</b> and <b>Public</b> are world-writable and get wiped, so legitimate software never installs there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>Get-AuthenticodeSignature '&lt;path&gt;' | Select Status, SignerCertificate</code> — a valid signature from the expected publisher means stale, not hostile; remove the entry and move on.`}</div>
     </div>`:''}
     ${(()=>{ const gcards=Object.entries(groups).map(([k,title])=>{
@@ -4696,7 +4707,10 @@ function paintConns(){
   el.innerHTML=`<div class="scr h shdr"><span class="st">state</span><span class="la">local</span><span class="ra">remote</span><span class="pn">process · ${fmt(rows.length)} total</span></div>`+
     rows.map(c=>{
       const cls=c.st==='Established'?'est':c.st==='Listen'?'lsn':'oth';
-      return `<div class="scr"><span class="st ${cls}">${sysEsc(c.st)}</span><span class="la">${sysEsc(c.l)}</span><span class="ra">${sysEsc(c.st==='Listen'?'—':c.r)}</span><span class="pn">${sysEsc(c.pn||c.pid)}</span></div>`;}).join('');
+      /* pn||pid||'—': on Linux an unelevated bridge can only resolve owners for its own session's
+         sockets (verified against ss -tanp in CI), so foreign rows arrive with both null - which
+         must render as the no-value dash, not the string "null". */
+      return `<div class="scr"><span class="st ${cls}">${sysEsc(c.st)}</span><span class="la">${sysEsc(c.l)}</span><span class="ra">${sysEsc(c.st==='Listen'?'—':c.r)}</span><span class="pn">${sysEsc(c.pn||c.pid||'—')}</span></div>`;}).join('');
 }
 RENDER.sys=()=>{
   const el=$('#p-sys');

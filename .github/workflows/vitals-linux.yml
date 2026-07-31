@@ -80,6 +80,14 @@ jobs:
           systemctl list-unit-files --type=service --state=enabled --no-pager 2>&1 | head -20 >> $OUT
           sec "systemd-analyze blame [scan.startup]"; systemd-analyze blame --no-pager 2>&1 | head -12 >> $OUT
           sec "XDG autostart [scan.startup]"; ls -1 /etc/xdg/autostart ~/.config/autostart 2>&1 | head -15 >> $OUT
+          # .desktop BYTES, not just names - the parser was written before any were captured, so
+          # this is the record that either confirms or corrects its fixture.
+          for f in /etc/xdg/autostart/*.desktop; do
+            [ -e "$f" ] || continue
+            sec "desktop file $f [scan.startup]"; head -25 "$f" >> $OUT 2>&1
+          done
+          sec "/proc/self/io [proc.io]"; cat /proc/self/io >> $OUT 2>&1
+          sec "systemd-inhibit --list [power.wake, future]"; systemd-inhibit --list --no-pager 2>&1 | head -12 >> $OUT
 
           # --- absent on a runner, captured so the empty shape is on record rather than assumed
           sec "/sys/class/power_supply [battery]"; ls -1 /sys/class/power_supply 2>&1 | head >> $OUT
@@ -138,6 +146,34 @@ jobs:
             console.log(`  ${s.dirs} dirs, ${s.files} files, ${(s.totalBytes/2**30).toFixed(2)} GB, ${s.denied} denied`);
             process.exit(bad ? 1 : 0);'
 
+      # Live escalation on REAL processes - the seam-driven suite proved the counting; this proves
+      # SIGTERM and SIGKILL themselves, which is what flips act.kill from written to verified.
+      - name: Kill escalation on real processes
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs"), { spawn } = require("child_process");
+            const acts = require("./actions-posix");
+            fs.writeFileSync("/tmp/ci-polite.js",   "setInterval(()=>{},1000);");
+            fs.writeFileSync("/tmp/ci-stubborn.js", "process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000);");
+            const a = spawn(process.execPath, ["/tmp/ci-polite.js"],   { stdio: "ignore" });
+            const b = spawn(process.execPath, ["/tmp/ci-stubborn.js"], { stdio: "ignore" });
+            setTimeout(() => acts.kill([a.pid, b.pid], (e, r) => {
+              setTimeout(() => {
+                let bad = 0;
+                const gone = (p) => { try { process.kill(p, 0); return false; } catch { return true; } };
+                const need = { "no error": !e,
+                               "polite child died on TERM (terminated=1)": r && r.terminated === 1,
+                               "stubborn child needed KILL (forced=1)":    r && r.forced === 1,
+                               "nothing denied":                          r && r.denied === 0,
+                               "ok=true":                                 r && r.ok === true,
+                               "both actually gone":                      gone(a.pid) && gone(b.pid) };
+                for (const [k, v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+                console.log("  result: " + JSON.stringify(r) + (e ? "  err: " + e.message : ""));
+                process.exit(bad ? 1 : 0);
+              }, 400);
+            }), 400);'
+
       - name: Bridge boots and serves a real sample
         if: always()
         run: |
@@ -145,20 +181,76 @@ jobs:
           for i in $(seq 1 40); do curl -sf http://127.0.0.1:8790/api/caps >/dev/null && break; sleep 0.5; done
           sleep 12
           node -e '
-            const http = require("http");
-            http.get({host:"127.0.0.1",port:8790,path:"/api/latest"}, r => {
-              let b=""; r.on("data",c=>b+=c); r.on("end",()=>{
-                const l=JSON.parse(b); let bad=0;
-                const need = {"cpu.total": l.cpu && l.cpu.total != null,
-                              "cpu.cores populated": l.cpu && Array.isArray(l.cpu.cores) && l.cpu.cores.length > 0,
-                              "mem.usedMB": l.mem && l.mem.usedMB > 0,
-                              "disk.vols": l.disk && l.disk.vols && l.disk.vols.length > 0,
-                              "disk.devices emitted": l.disk && Array.isArray(l.disk.devices),
-                              "net.ifaces emitted": l.net && Array.isArray(l.net.ifaces),
-                              "proc rows": l.proc && l.proc.length > 0};
-                for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
-                console.log("  battery: " + JSON.stringify(l.pwr && l.pwr.bat) + "   gpu: " + JSON.stringify(l.gpu));
-                console.log("  (both null here is CORRECT - a runner has neither)");
-                process.exit(bad ? 1 : 0);
-              });
-            }).on("error", e => { console.error("bridge unreachable: " + e.message); process.exit(1); });'
+            const http = require("http"), fs = require("fs");
+            const get = (p) => new Promise((res, rej) => http.get({host:"127.0.0.1",port:8790,path:p},
+              r => { let b=""; r.on("data",c=>b+=c); r.on("end",()=>{ try { res(JSON.parse(b)); } catch(e){ rej(new Error(p+": "+e.message)); } }); }).on("error", rej));
+            (async () => {
+              let bad = 0;
+              const run = (need) => { for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; } };
+
+              const l = await get("/api/latest");
+              run({"cpu.total": l.cpu && l.cpu.total != null,
+                   "cpu.cores populated": l.cpu && Array.isArray(l.cpu.cores) && l.cpu.cores.length > 0,
+                   "mem.usedMB": l.mem && l.mem.usedMB > 0,
+                   "disk.vols": l.disk && l.disk.vols && l.disk.vols.length > 0,
+                   /* promoted from "emitted" to POPULATED - the difference between an array and a measurement */
+                   "disk.devices rows with numeric rates": l.disk && Array.isArray(l.disk.devices) && l.disk.devices.length > 0
+                      && l.disk.devices.every(d => d.id && d.readMBs >= 0 && d.writeMBs >= 0),
+                   "net.ifaces rows": l.net && Array.isArray(l.net.ifaces) && l.net.ifaces.length > 0
+                      && l.net.ifaces.every(i => i.id && (i.rxMBs === null || i.rxMBs >= 0)),
+                   "proc rows": l.proc && l.proc.length > 0,
+                   "self measured (cpu number, mb > 0)": l.self && typeof l.self.cpu === "number" && l.self.mb > 0,
+                   "mem.pressure follows the kernel": fs.existsSync("/proc/pressure/memory")
+                      ? (l.mem.pressure && typeof l.mem.pressure.some === "number") : l.mem.pressure === null});
+              console.log("  battery: " + JSON.stringify(l.pwr && l.pwr.bat) + "   gpu: " + JSON.stringify(l.gpu));
+              console.log("  (both null here is CORRECT - a runner has neither)");
+
+              /* net.sockets: the bridge queries its own kernel about itself - the one socket whose
+                 owner MUST resolve unelevated is the :8790 listener we are talking to. */
+              const conns = await get("/api/conns");
+              const own = Array.isArray(conns) && conns.find(c => c.st === "Listen" && /:8790$/.test(c.l));
+              run({"conns is an array of rows": Array.isArray(conns) && conns.length > 0,
+                   "rows carry l/r/st and null-or-numeric pid": Array.isArray(conns) && conns.every(c =>
+                      typeof c.l === "string" && typeof c.st === "string" && (c.pid === null || c.pid > 0)),
+                   "the bridge own :8790 listener found, owner resolved to node":
+                      own && own.pid > 0 && own.pn === "node",
+                   "foreign sockets kept with pid null (root sshd et al), not dropped":
+                      Array.isArray(conns) && conns.some(c => c.pid === null)});
+              if (own) console.log("  own listener: " + JSON.stringify(own));
+
+              /* scan.startup: real systemd units from a real systemd. */
+              const su = await get("/api/startup");
+              run({"startup rows arrived": Array.isArray(su) && su.length > 0,
+                   "every row honours the contract": Array.isArray(su) && su.every(r =>
+                      ["service","login"].includes(r.kind) && r.name && ["enabled","disabled"].includes(r.state)
+                      && typeof r.suspect === "boolean"),
+                   "systemd services present": Array.isArray(su) && su.some(r => r.kind === "service"),
+                   "a measured boot cost joined onto at least one unit": Array.isArray(su) && su.some(r => /s at boot$/.test(r.cmd))});
+              if (Array.isArray(su)) console.log("  " + su.length + " rows, e.g. " + JSON.stringify(su.filter(r=>r.cmd).slice(0,3)));
+
+              process.exit(bad ? 1 : 0);
+            })().catch(e => { console.error("bridge check failed: " + e.message); process.exit(1); });'
+
+      # The production clean target, swept for real. Runs LAST because it empties this runner
+      # user's ~/.cache - ephemeral by design, and exactly what act.clean claims to do.
+      - name: Clean the real usercaches target
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs"), os = require("os"), path = require("path");
+            const acts = require("./actions-posix");
+            const dir = process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+            fs.mkdirSync(path.join(dir, "vitals-ci-seed"), { recursive: true });
+            fs.writeFileSync(path.join(dir, "vitals-ci-seed", "blob.bin"), Buffer.alloc(50 << 20));
+            acts.clean("usercaches", (e, r) => {
+              let bad = 0;
+              const need = { "no error": !e,
+                             "result contract complete": r && ["ok","freedGB","leftGB","entriesDeleted","entriesDenied","entriesLocked","needsAdmin"].every(k => k in r),
+                             "the seeded 50 MB was measured and freed": r && r.freedGB >= 0.04,
+                             "seed actually gone from disk": !fs.existsSync(path.join(dir, "vitals-ci-seed")),
+                             "target directory itself survives": fs.existsSync(dir),
+                             "denials are a count, not a surprise": r && Number.isInteger(r.entriesDenied) };
+              for (const [k, v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+              console.log("  result: " + JSON.stringify(r) + (e ? "  err: " + e.message : ""));
+              process.exit(bad ? 1 : 0);
+            });'

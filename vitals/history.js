@@ -64,9 +64,13 @@ class History {
       cpuMax: Math.max(0, ...(tick.cpu.cores || [0])),
       mem: tick.mem.pct,
       hardFaults: tick.mem.pagesSec,
-      /* Apple's kernel memory verdict (1 normal / 2 warning / 4 critical); null everywhere it is
-         not measured. flush() drops null fields, so Windows rollups do not grow a dead column. */
-      pressure: tick.mem.pressure != null ? tick.mem.pressure : null,
+      /* The kernel memory verdict; null everywhere it is not measured, and flush() drops null
+         fields so Windows rollups do not grow a dead column. Two platform shapes, one number
+         recorded: darwin emits Apple's level (1 normal / 2 warning / 4 critical), linux emits PSI
+         {some, full} avg10 percentages and the `some` figure is the one archived - a history file
+         never mixes the two, because a machine never changes kernels between ticks. */
+      pressure: typeof tick.mem.pressure === 'number' ? tick.mem.pressure
+        : (tick.mem.pressure && typeof tick.mem.pressure.some === 'number' ? tick.mem.pressure.some : null),
       diskPct: c.pct,
       diskFreeGB: c.freeGB,
       diskBusy: io.busyPct,
