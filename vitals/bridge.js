@@ -59,6 +59,9 @@ const PS_HOST = process.platform === 'win32';
    osascript, same route contracts as the PowerShell one-shots. Loaded only off Windows - on
    Windows the PowerShell paths below remain the reference implementation, untouched. */
 const posixActs = PS_HOST ? null : require('./actions-posix');
+/* The native INSPECTION layer: sockets-with-owners and the startup scan, the read half of the
+   same port. Same split as posixActs, same reason for loading it only off Windows. */
+const posixInspect = PS_HOST ? null : require('./inspect-posix');
 
 /* ================= MODE: what this install is allowed to DO =================
  *
@@ -346,7 +349,11 @@ const WINDOWS_ONLY_ROUTES = new Set([
    implementations have never run on their platforms. Route reachable, capability unclaimed -
    that is the same two-act split cpu.perCore documents in the darwin manifest. */
 const PORTED_ROUTES = {
-  darwin: new Set(['/api/kill', '/api/clean', '/api/restartapp']),
+  darwin: new Set(['/api/kill', '/api/clean', '/api/restartapp',
+    /* 2026-07-31, the inspection + clipboard set: conns and startup dispatch to inspect-posix.js,
+       clip to clipwatch-posix.js. Same rule as the actions - route reachable, capability
+       unclaimed until the CI live run sees real rows. */
+    '/api/conns', '/api/startup', '/api/clip']),
   linux: new Set(['/api/kill', '/api/clean']),   // restartApp needs osascript; no Linux equivalent yet
 };
 const PORTED_HERE = PORTED_ROUTES[process.platform] || new Set();
@@ -603,9 +610,17 @@ const clipFile = (ms) => path.join(HIST_DIR, `clipboard-${new Date(ms || Date.no
 
 function clipStart() {
   if (clipProc) return { running: true, already: true };
-  if (!PS_HOST) return { running: false, unsupported: true, reason: 'clipboard history is Windows-only in this build' };
-  const p = spawn(PS, [...PS_ARGS, '-File', path.join(HERE, 'clipwatch.ps1'), '-Out', clipFile()],
-    { windowsHide: true });
+  /* Two watchers, one contract: same jsonl rows, same file, same scrub/prune pipeline above.
+     The macOS one is text-only and polls pbpaste - clipwatch-posix.js states the cost and the
+     blind spots in its header. Linux would need xclip/wl-clipboard and a running session, which
+     cannot be assumed from here: still honestly unsupported. */
+  if (!PS_HOST && process.platform !== 'darwin') {
+    return { running: false, unsupported: true, reason: 'clipboard history needs a pasteboard the bridge can read; not ported to ' + process.platform };
+  }
+  const [wcmd, wargs] = PS_HOST
+    ? [PS, [...PS_ARGS, '-File', path.join(HERE, 'clipwatch.ps1'), '-Out', clipFile()]]
+    : [process.execPath, [path.join(HERE, 'clipwatch-posix.js'), '--out', clipFile()]];
+  const p = spawn(wcmd, wargs, { windowsHide: true });
   p.stdout.setEncoding('utf8');
   p.stdout.on('data', () => {});          // the watcher writes its own file; stdout is just a heartbeat
   /* Same rule as the window agent: no 'error' handler means a missing binary kills the bridge, not
@@ -1536,9 +1551,22 @@ const server = http.createServer((req, res) => {
     return ps(SCRIPTS.sizeOne(t), (e, d) =>
       json(res, e ? 500 : 200, e ? { key, error: e.message } : { ...t, ...d, ps: undefined }));
   }
-  if (p === '/api/startup') return ps(SCRIPTS.startup, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : asArray(d)));
+  if (p === '/api/startup') {
+    if (!PS_HOST) {
+      return posixInspect.startup((e, d, note) => {
+        /* A refused login-items read must leave a trace - rendered as an empty group it would be a
+           fabricated "nothing starts here". The array is the page's contract; the note is logged. */
+        if (note) console.error('[startup] ' + note);
+        json(res, e ? 500 : 200, e ? { error: e.message } : d);
+      });
+    }
+    return ps(SCRIPTS.startup, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : asArray(d)));
+  }
   if (p === '/api/processes') return ps(SCRIPTS.processes, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : asArray(d)));
-  if (p === '/api/conns') return ps(SCRIPTS.conns, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : asArray(d)));
+  if (p === '/api/conns') {
+    if (!PS_HOST) return posixInspect.conns((e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : d));
+    return ps(SCRIPTS.conns, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : asArray(d)));
+  }
   if (p === '/api/netinfo') return ps(SCRIPTS.netinfo, (e, d) => json(res, e ? 500 : 200, e ? { error: e.message } : d));
   /* Latency + speed tests are POST on purpose: they cost the user's bandwidth, so they must never
    * be triggered by a prefetch, a cache-warmer, or anything that GETs URLs speculatively. */

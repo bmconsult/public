@@ -200,9 +200,11 @@ const PLATFORMS = {
       /* Corrected 2026-07-30 to match the CODE rather than the intent, and again 2026-07-31 the
          OTHER way: much below is now IMPLEMENTED (per-core, committed approximation, pressure,
          per-NIC, per-device, GPU via IOAccelerator, wake assertions, the growth walker, the whole
-         action layer) and every flag for it is still false, because a flag here means "verified on
-         this platform" and none of it has executed on a Mac. The note beside each says which state
-         it is in. The CI live suite flipping green is what changes these, one by one. */
+         action layer - and, later the same day, the socket and startup inspectors, the clipboard
+         watcher, per-process faults, the disk read/write split and the menu-bar item) and every
+         flag for it is still false, because a flag here means "verified on this platform" and none
+         of it has executed on a Mac. The note beside each says which state it is in. The CI live
+         suite flipping green is what changes these, one by one. */
       'cpu.perCore': false, 'cpu.temps': false,
       'mem.hardFaults': true, 'mem.committed': false, 'mem.cache': true, 'mem.pressure': false,
       'disk.perVolume': true, 'disk.io': 'partial', 'disk.perDevice': false,
@@ -234,11 +236,14 @@ const PLATFORMS = {
       'proc.cpu': 'macOS `ps` reports %cpu relative to ONE core, so a saturated multi-threaded ' +
                   'process can exceed 100. Normalised by core count to match the Windows and Linux ' +
                   'scale, but this is unverified on hardware.',
-      'proc.faults': 'Not implemented - needs `top -stats faults`, whose column layout is being ' +
-                     'captured by CI before the parser is written. Null, never 0.',
-      'disk.io': 'iostat gives COMBINED throughput only. Read/write split, busy percentage and ' +
-                 'queue depth are all null; only combinedMBs is real. The split lives one level ' +
-                 'up in IOBlockStorageDriver statistics, whose real shape CI is capturing.',
+      'proc.faults': 'Implemented: `top -l 1 -stats pid,faults` polled every 15 ticks, joined onto ' +
+                     'the ps rows by pid - lifetime counts, the same quantity the Windows column ' +
+                     'shows. The parser refuses any output whose header is not exactly PID/FAULTS, ' +
+                     'so a reordered top yields null, never a misread column. Unverified on hardware.',
+      'disk.io': 'iostat gives COMBINED throughput; the read/write split is implemented one level ' +
+                 'up, from IOBlockStorageDriver cumulative bytes differenced across a 5-tick poll - ' +
+                 'an AVERAGE over that window, totals only, and unverified until CI\'s captured ' +
+                 'ioreg output agrees. Busy percentage and queue depth remain null.',
       'disk.perDevice': 'Implemented: per-disk MB/s and tps from the iostat columns, named from ' +
                         'its header row. Unverified on hardware.',
       'net.perInterface': 'Implemented: per-NIC rates differenced from netstat -ib. Unverified on ' +
@@ -247,6 +252,25 @@ const PLATFORMS = {
                    'powermetrics requires root. Omitted rather than faked.',
       'proc.io': 'Per-process disk I/O needs fs_usage, which requires root and disabling SIP on ' +
                  'some releases. Not worth the cost.',
+      'net.sockets': 'Implemented (inspect-posix.js): netstat -anv reports the owning pid for ' +
+                     'EVERY socket unprivileged - lsof without root sees only your own - joined ' +
+                     'to names from ps. The pid column\'s position is computed from the header, ' +
+                     'not hard-coded, and an unrecognised header refuses rather than guesses. ' +
+                     'Unverified on hardware.',
+      'scan.startup': 'Implemented (inspect-posix.js): LaunchAgents and LaunchDaemons plists via ' +
+                      'plutil (excluding /System, as the Windows scan excludes \\Microsoft\\), ' +
+                      'launchctl state, and System Events login items - which need automation ' +
+                      'consent and are reported as unavailable when refused, not as an empty ' +
+                      'list. Unverified on hardware.',
+      'clip.history': 'Implemented (clipwatch-posix.js), and honestly weaker than Windows: text ' +
+                      'only, no source app (reading it would raise TCC prompts from a background ' +
+                      'process), and polling pbpaste costs a fork per poll where Windows polls a ' +
+                      'free counter - the watcher\'s header states the cost. Same jsonl, same ' +
+                      'secret heuristics, same 24 h scrub. At best \'partial\' once CI sees it ' +
+                      'log a real copy.',
+      'host.tray': 'Implemented in the native host (NSStatusItem menu-bar item: show/hide, float ' +
+                   'on top, quit-panel-not-bridge). Only exists when VitalsHost runs, and no ' +
+                   'menu bar has ever drawn it - CI proves the build, human eyes prove the item.',
       'gpu.total': 'Implemented WITHOUT root: IOAccelerator\'s "Device Utilization %", the source ' +
                    'behind Activity Monitor\'s GPU history. The key names are the exact kind of ' +
                    'documented-not-observed assumption that has been wrong here before, so this ' +

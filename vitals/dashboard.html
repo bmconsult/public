@@ -4294,8 +4294,14 @@ RENDER.boot=async()=>{
   try{ list=await (await fetch('/api/startup')).json(); }catch(e){ el.innerHTML=`<div class="empty">scan failed: ${e.message}</div>`; return; }
   if(paintUnsupported(el,list,'The startup scan')) return;
   if(!Array.isArray(list)) list=[list];
-  const groups={run:'Registry Run keys',folder:'Startup folders',task:'Scheduled tasks',service:'Auto-start services'};
-  const gcol={run:'--cpu',folder:'--mem',task:'--net',service:'--disk'};
+  /* One page, two vocabularies: the Windows kinds and the macOS kinds coexist here because rows
+     arrive with a `kind` and empty groups render nothing - so each platform sees only its own.
+     A mac kind missing from this map would be silently counted in the total yet drawn nowhere,
+     which is how a scan looks like it lost entries. */
+  const groups={run:'Registry Run keys',folder:'Startup folders',task:'Scheduled tasks',service:'Auto-start services',
+                agent:'Launch agents',daemon:'Launch daemons',login:'Login items'};
+  const gcol={run:'--cpu',folder:'--mem',task:'--net',service:'--disk',
+              agent:'--cpu',daemon:'--disk',login:'--mem'};
   const sus=list.filter(x=>x.suspect);
   const on=list.filter(x=>x.state==='enabled').length;
   const counts=Object.keys(groups).map(k=>({k,n:list.filter(x=>x.kind===k).length})).filter(g=>g.n);
@@ -4314,7 +4320,9 @@ RENDER.boot=async()=>{
       <span class="fmeta"><span class="tag crit">verify first</span></span>
       <h4 style="margin-bottom:4px">Autostart from a throwaway folder</h4>
       ${sus.map(x=>`<div style="font-size:11.5px"><b>${x.name}</b> <span class="muted" style="font-size:10.5px;word-break:break-all">· ${x.cmd}</span></div>`).join('')}
-      <div class="why" style="margin-top:6px"><b>Temp</b>, <b>Downloads</b> and <b>Public</b> are world-writable and get wiped, so legitimate software never installs there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>Get-AuthenticodeSignature '&lt;path&gt;' | Select Status, SignerCertificate</code> — a valid signature from the expected publisher means stale, not hostile; remove the entry and move on.</div>
+      <div class="why" style="margin-top:6px">${(S.caps&&S.caps.platform)==='darwin'
+        ?`<b>/tmp</b>, <b>Downloads</b> and <b>/Users/Shared</b> are world-writable or routinely wiped, so legitimate software never installs there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>codesign -dv --verbose=2 '&lt;path&gt;'</code> — a valid signature from the expected developer means stale, not hostile; remove the entry and move on.`
+        :`<b>Temp</b>, <b>Downloads</b> and <b>Public</b> are world-writable and get wiped, so legitimate software never installs there — it is the most common place malware hides persistence. Verify before assuming the worst: <code>Get-AuthenticodeSignature '&lt;path&gt;' | Select Status, SignerCertificate</code> — a valid signature from the expected publisher means stale, not hostile; remove the entry and move on.`}</div>
     </div>`:''}
     ${(()=>{ const gcards=Object.entries(groups).map(([k,title])=>{
       const rows=list.filter(x=>x.kind===k); if(!rows.length) return '';

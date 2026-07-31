@@ -74,10 +74,16 @@ final class PanelWindow: NSWindow {
 
 // ---------------------------------------------------------------------------- app
 
-final class Host: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class Host: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSMenuDelegate {
     let opts: Options
     var window: PanelWindow!
     var web: WKWebView!
+    /// The menu-bar item. On Windows this is the tray icon (host.tray); on macOS the menu bar is
+    /// the same idea in the platform's own idiom. It matters more here than there: the accessory
+    /// activation policy below removes the Dock icon and the app switcher entry, so without this
+    /// item a hidden panel would have NO visible handle at all - invisible-but-running is how a
+    /// monitor gets force-quit by someone who thinks it is stuck.
+    var statusItem: NSStatusItem?
     /// Set while a drag is in progress so the mouse-moved handler knows to move the window.
     var dragOrigin: NSPoint?
 
@@ -134,6 +140,64 @@ final class Host: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScrip
         // An instrument is not a document. Accessory policy keeps it out of the Dock and the
         // app switcher, which is what "panel" means on this platform.
         NSApp.setActivationPolicy(.accessory)
+
+        installStatusItem()
+    }
+
+    // ------------------------------------------------------------------ menu bar (host.tray)
+
+    func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let btn = item.button {
+            // A template symbol so the glyph follows the menu bar's light/dark rendering. The
+            // text fallback exists because a status item with neither image nor title is an
+            // invisible click target occupying real menu-bar space.
+            if let img = NSImage(systemSymbolName: "waveform.path.ecg", accessibilityDescription: "VITALS") {
+                img.isTemplate = true
+                btn.image = img
+            } else {
+                btn.title = "VITALS"
+            }
+            btn.toolTip = "VITALS - this machine, measured"
+        }
+        let menu = NSMenu()
+        // Autoenablement would re-derive isEnabled from the responder chain and quietly override
+        // what menuNeedsUpdate sets; enablement here is decided from window state, by us.
+        menu.autoenablesItems = false
+        menu.addItem(NSMenuItem(title: "Show panel", action: #selector(showPanel), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Hide panel", action: #selector(hidePanel), keyEquivalent: ""))
+        let top = NSMenuItem(title: "Float on top", action: #selector(toggleTop), keyEquivalent: "")
+        menu.addItem(top)
+        menu.addItem(.separator())
+        // Named precisely: quitting the PANEL leaves the bridge measuring, and saying just "Quit"
+        // would let someone believe they had stopped the recorder.
+        menu.addItem(NSMenuItem(title: "Quit panel (bridge keeps measuring)", action: #selector(quitPanel), keyEquivalent: "q"))
+        for it in menu.items { it.target = self }
+        menu.delegate = self
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc func showPanel() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    @objc func hidePanel() { window.orderOut(nil) }
+    @objc func toggleTop() { window.level = window.level == .floating ? .normal : .floating }
+    @objc func quitPanel() { NSApp.terminate(nil) }
+
+    /// The checkmark reflects the WINDOW's actual state at the moment the menu opens - not a
+    /// separately-tracked boolean that can drift from it, and drift is the whole failure mode of
+    /// mirrored state. Show/Hide enable from the same live fact.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        for it in menu.items {
+            switch it.action {
+            case #selector(toggleTop): it.state = window.level == .floating ? .on : .off
+            case #selector(showPanel): it.isEnabled = !window.isVisible
+            case #selector(hidePanel): it.isEnabled = window.isVisible
+            default: break
+            }
+        }
     }
 
     // ------------------------------------------------------------------ page -> host messages

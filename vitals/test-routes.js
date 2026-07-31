@@ -87,6 +87,12 @@ function reachesPS(body) {
 const GUARDED_BY_DEPENDENCY = {
   '/api/mft': 'reads MFT snapshots that only mftscan.ps1 creates',
   '/api/scanlog': 'reads the log mftscan.ps1 writes',
+  /* Not a PS pattern-match since clipStart() grew a per-platform dispatch (2026-07-31), but still
+     rightly guarded: the watcher exists on Windows (clipwatch.ps1) and darwin (clipwatch-posix.js,
+     via PORTED_ROUTES), and a platform with neither - linux, until someone writes the xclip/
+     wl-clipboard one - must 501 rather than answer "running" about a watcher that cannot read
+     any pasteboard. */
+  '/api/clip': 'dispatches to a per-platform clipboard watcher; platforms without one must refuse honestly',
   /* '/api/growth' left this list 2026-07-31: growthscan.js now produces snapshots on any platform,
      and the route already answers an honest {need:2, have:N} when none exist - so its dependency
      argument is gone and gating it would 501 a working cross-platform feature. */

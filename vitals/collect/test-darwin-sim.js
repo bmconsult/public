@@ -110,19 +110,43 @@ Listed by owning process:
 const IOREG_GPU = `    "IOClass" = "AGXAcceleratorG14X"
     "Device Utilization %" = 37`;
 
+/* top -l 1 -stats pid,faults: preamble junk, then the two-column table. Chrome's two pids carry
+   faults (one with top's trailing "+" changing-value decoration, which must be stripped), so the
+   aggregated group must SUM them. pid 1201 (trustd) is absent from the table on purpose: its
+   group must report null, not zero. */
+const TOP = `Processes: 512 total, 2 running, 510 sleeping, 2231 threads
+Load Avg: 2.10, 1.90, 1.80
+
+PID    FAULTS
+1      2000
+442    120000+
+443    30000
+907    5000`;
+
+/* ioreg IOBlockStorageDriver "Statistics" rows across two drivers. Second poll: +10 MB read,
+   +5 MB written in ~2 s of wall clock -> ~5 / ~2.5 MB/s averages. */
+const BLK1 = `      "Statistics" = {"Bytes (Read)"=1000000000,"Bytes (Written)"=500000000,"Operations (Read)"=1200,"Operations (Write)"=800}
+      "Statistics" = {"Bytes (Read)"=200000000,"Bytes (Written)"=100000000,"Operations (Read)"=300,"Operations (Write)"=100}`;
+const BLK2 = `      "Statistics" = {"Bytes (Read)"=1008388608,"Bytes (Written)"=504194304,"Operations (Read)"=1300,"Operations (Write)"=900}
+      "Statistics" = {"Bytes (Read)"=202097152,"Bytes (Written)"=101048576,"Operations (Read)"=350,"Operations (Write)"=150}`;
+
 /* ---------------- fake OS ---------------- */
 
 let shCalls = [];
-let tickNo = 0;
+let tickNo = 0, blkPolls = 0;
 
 function fakeSh(cmd, cb) {
   shCalls.push(cmd.slice(0, 40));
   let out = '';
   if (cmd.startsWith('sysctl')) out = SYSCTL;
-  /* Order matters: the assertions poll also starts with "pmset". */
+  /* Order matters: the assertions poll also starts with "pmset", and BOTH ioreg polls start with
+     "ioreg" - the block-storage one must be matched on its class name or the gpu fixture answers
+     a disk question, which is precisely how a fixture fakes a pass. */
   else if (cmd.startsWith('pmset -g assertions')) out = ASSERTIONS;
   else if (cmd.startsWith('pmset')) out = PMSET;
+  else if (cmd.includes('IOBlockStorageDriver')) { blkPolls++; out = blkPolls === 1 ? BLK1 : BLK2; }
   else if (cmd.startsWith('ioreg')) out = IOREG_GPU;
+  else if (cmd.startsWith('top')) out = TOP;
   else if (cmd.startsWith('df')) out = DF;
   else if (cmd.startsWith('vm_stat')) {
     tickNo++;
@@ -148,7 +172,11 @@ function fakeIostat() {
   return em;
 }
 
-darwin._inject(fakeSh, fakeIostat);
+/* Cadences compressed to every 2nd tick for the faults and block polls: their differencing and
+   join logic must run TWICE inside this short simulation to be tested at all, and at the
+   production cadence (15 and 5 ticks) it would run once or never. The cadence is configuration,
+   not logic - the logic under test is identical. */
+darwin._inject(fakeSh, fakeIostat, { faults: 2, blk: 2 });
 
 /* ---------------- run ---------------- */
 
@@ -247,6 +275,13 @@ setTimeout(() => {
   check('proc.io fields NULL not 0 (fs_usage needs root)',
     t2.proc.every((p) => p.ioMBs === null && p.rMBs === null && p.wMBs === null));
 
+  console.log('\n--- per-process faults: top joined by pid, summed per group ---');
+  if (chrome) check('chrome pf = SUM of its two pids, "+" decoration stripped (120000 + 30000)',
+    chrome.pf === 150000, chrome.pf);
+  const trustd = t2.proc.find((p) => p.n === 'trustd');
+  check('a pid absent from top\'s table reports NULL, not zero',
+    !!trustd && trustd.pf === null, trustd && String(trustd.pf));
+
   console.log('\n--- network: de-duplication and rate differencing ---');
   console.log(`  tick1 rx ${t1.net.rxMBs}  tick2 rx ${t2.net.rxMBs} MB/s (fixture added 5 MB rx, 1 MB tx)`);
   /* NULL on the first tick, not 0. There is nothing to difference against yet, and a 0 would read
@@ -284,13 +319,23 @@ setTimeout(() => {
   if (ext) check('freeGB from the Available column (400000000 kB)',
     near(ext.freeGB, 400000000 * 1024 / 1073741824, 0.2), ext.freeGB);
 
-  console.log('\n--- disk io: nulls where macOS cannot answer ---');
+  console.log('\n--- disk io: nulls where macOS cannot answer, split once ioreg has two samples ---');
   console.log(`  ${JSON.stringify(t2.disk.io)}`);
-  check('readMBs NULL (iostat gives combined only)', t2.disk.io.readMBs === null);
-  check('writeMBs NULL', t2.disk.io.writeMBs === null);
+  check('readMBs NULL before the SECOND ioreg sample exists (one point is not a rate)',
+    t2.disk.io.readMBs === null, String(t2.disk.io.readMBs));
+  check('writeMBs NULL before the second sample', t2.disk.io.writeMBs === null);
   check('busyPct NULL, not 0', t2.disk.io.busyPct === null);
   check('combinedMBs = sum of both disks (0.72 + 0.31)', near(t2.disk.io.combinedMBs, 1.03, 0.02),
     t2.disk.io.combinedMBs);
+  const tl = ticks[ticks.length - 1];
+  console.log(`  last tick: ${JSON.stringify(tl.disk.io)}`);
+  check('enough ticks for the second block poll (cadence 2)', ticks.length >= 3, ticks.length);
+  /* Both drivers advanced: (8388608 + 2097152) read = 10 MB, half that written, over ~2 s. */
+  check('read split ~5 MB/s: SUMMED across drivers, differenced, averaged over the window',
+    near(tl.disk.io.readMBs, 5, 1.5), tl.disk.io.readMBs);
+  check('write split ~2.5 MB/s', near(tl.disk.io.writeMBs, 2.5, 0.8), tl.disk.io.writeMBs);
+  check('busyPct STILL null on the last tick - the split arriving must not invent busy time',
+    tl.disk.io.busyPct === null && tl.disk.io.queue === null);
 
   console.log('\n--- per-device disk rows (disk.devices) ---');
   const devs = t2.disk.devices;
@@ -346,7 +391,11 @@ setTimeout(() => {
     JSON.stringify(t2.wake));
 
   console.log('\n--- absent features stay absent (null, never a plausible zero) ---');
-  check('proc.pf NULL not 0 (fault counting never implemented here)', t2.proc.every((p) => p.pf === null));
+  /* pf used to be asserted null-for-everyone, which encoded "not implemented" as a requirement -
+     the same trap the per-core comment above describes. The surviving intent: pf is a real join
+     or null, never a fabricated zero. */
+  check('proc.pf is a count or NULL, never 0-for-everyone',
+    t2.proc.every((p) => p.pf === null || (Number.isInteger(p.pf) && p.pf > 0)));
   check('self block NULL, not fabricated zeros', t2.self === null,
     'FOOTPRINT claims to include its own cost; 0.00% there would be a measured-looking lie');
 
@@ -362,7 +411,7 @@ setTimeout(() => {
   check('ONE combined shell call per tick, not three', perTick === ticks.length, `${perTick} for ${ticks.length} ticks`);
 
   finish();
-}, 2600);
+}, 3600);      // long enough for tick 3, where the SECOND block-storage poll fires (cadence 2)
 
 function finish() {
   console.log('');

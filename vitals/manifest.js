@@ -24,11 +24,13 @@ const FILES = [
   // the non-Windows action layer + the portable growth walker (and the elevated one-shot the
   // macOS clean action hands to the administrator prompt)
   'actions-posix.js', 'clean-admin.js', 'growthscan.js',
+  // the non-Windows inspection layer (sockets, startup) and the macOS clipboard watcher
+  'inspect-posix.js', 'clipwatch-posix.js',
   // collectors + their suites (the suites ship: they are how a new host proves itself)
   'collect/caps.js', 'collect/index.js', 'collect/win32.js', 'collect/linux.js', 'collect/darwin.js',
   'collect/test-linux.js', 'collect/test-linux-live.js', 'collect/test-linux-stimulus.js',
   'collect/test-darwin.js', 'collect/test-darwin-sim.js', 'collect/test-darwin-live.js',
-  'test-routes.js', 'test-actions-posix.js',
+  'test-routes.js', 'test-actions-posix.js', 'test-inspect-posix.js',
   // Windows host + one-shots
   'panel.ps1', 'launch.ps1', 'metrics.ps1', 'winagent.ps1', 'clipwatch.ps1', 'mftscan.ps1',
   'iotrace.ps1', 'clean-admin.ps1', 'space-admin.ps1', 'filetools.ps1', 'badge.ps1', 'shot.ps1',

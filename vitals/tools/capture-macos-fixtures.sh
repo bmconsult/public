@@ -121,6 +121,16 @@ sysctl kern.memorystatus_vm_pressure_level vm.swapusage 2>&1 >> "$OUT"
 emit "top -l 2 -stats pid,command,cpu,mem,faults,pageins,power (2nd sample, first 20)"
 top -l 2 -n 20 -stats pid,command,cpu,mem,faults,pageins,power 2>&1 | tail -40 >> "$OUT" 2>&1
 
+# The EXACT command collect/darwin.js issues for its faults join - the parser gates on this
+# header being precisely PID/FAULTS, so this capture is what proves or breaks that gate.
+emit "top -l 1 -stats pid,faults (exact collector command, first 25)"
+top -l 1 -stats pid,faults 2>&1 | head -25 >> "$OUT" 2>&1
+
+# The exact grep the collector runs for the read/write split (the -a XML capture above shows the
+# full tree; THIS shows the flat form the regex actually reads).
+emit "ioreg IOBlockStorageDriver, flat Bytes lines (exact collector command)"
+ioreg -rc IOBlockStorageDriver 2>/dev/null | grep "Bytes" | head -10 >> "$OUT" 2>&1 || echo "(none)" >> "$OUT"
+
 # Sockets WITH owning pid, unprivileged. lsof -i shows only your own processes without root; this
 # reads via sysctl and sees everything.
 emit "netstat -anv (first 25, listening + established)"
@@ -128,6 +138,16 @@ if [ "$REDACT" = "1" ]; then
   netstat -anv 2>&1 | head -25 | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' >> "$OUT" 2>&1
 else
   netstat -anv 2>&1 | head -25 >> "$OUT" 2>&1
+fi
+
+# The exact form inspect-posix.js issues: TCP only. The HEADER row is the part that matters -
+# the pid column's position is computed from it, so a header this parser has not seen is the
+# difference between /api/conns working and refusing.
+emit "netstat -anv -p tcp (exact collector command, first 20)"
+if [ "$REDACT" = "1" ]; then
+  netstat -anv -p tcp 2>&1 | head -20 | sed -E 's/([0-9]{1,3}\.){3}[0-9]{1,3}/x.x.x.x/g' >> "$OUT" 2>&1
+else
+  netstat -anv -p tcp 2>&1 | head -20 >> "$OUT" 2>&1
 fi
 
 # Startup items. plutil converts Apple's binary plists to JSON with no parser to write.

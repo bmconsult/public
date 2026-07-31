@@ -97,6 +97,12 @@ jobs:
         if: always()
         run: node test-actions-posix.js
 
+      # The inspection layer (sockets-with-owners, startup scan) and the clipboard watcher's
+      # dedupe/secret/row logic, from fixtures. Their LIVE halves run below against the bridge.
+      - name: Inspection layer + clip watcher suite
+        if: always()
+        run: node test-inspect-posix.js
+
       # The walker against a real macOS home directory: proves it survives genuine permission
       # walls, firmlinks and .app bundles, and that the snapshot it writes is one History.growth
       # can read. This is the live half of what the suite above simulates.
@@ -155,7 +161,88 @@ jobs:
               });
             }).on("error", e => { console.error("bridge unreachable: " + e.message); process.exit(1); });
           '
+          # The ported inspection routes, against the SAME live bridge. These were 501s until
+          # 2026-07-31; the checks below are what turns "route reachable" into a real finding
+          # about whether netstat/launchctl on this macOS emit what inspect-posix.js assumed.
+          echo "--- /api/conns (live) ---"
+          curl -sf http://127.0.0.1:8790/api/conns | head -c 600 || echo "conns did not answer"
+          echo ""
+          node -e '
+            const http = require("http");
+            http.get({host:"127.0.0.1",port:8790,path:"/api/conns"}, r => {
+              let b=""; r.on("data",c=>b+=c); r.on("end",()=>{
+                const rows=JSON.parse(b); let bad=0;
+                const need = {
+                  "rows is an array": Array.isArray(rows),
+                  // the bridge itself is LISTENING on 8790, so a correct parser cannot miss it
+                  "sees the bridge listening on 8790": Array.isArray(rows) &&
+                    rows.some(r => r.st==="Listen" && /:8790$/.test(r.l)),
+                  "every row has l/st/pid": Array.isArray(rows) &&
+                    rows.every(r => r.l && r.st && Number.isInteger(r.pid)),
+                  "the bridge pid resolves to a name": Array.isArray(rows) &&
+                    rows.some(r => /:8790$/.test(r.l) && r.pn),
+                };
+                for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+                process.exit(bad?1:0);
+              });
+            }).on("error", e => { console.error("conns unreachable: " + e.message); process.exit(1); });
+          '
+          echo "--- /api/startup (live) ---"
+          node -e '
+            const http = require("http");
+            http.get({host:"127.0.0.1",port:8790,path:"/api/startup"}, r => {
+              let b=""; r.on("data",c=>b+=c); r.on("end",()=>{
+                const rows=JSON.parse(b); let bad=0;
+                const need = {
+                  "rows is an array": Array.isArray(rows),
+                  // a Mac with EMPTY LaunchDaemons does not exist; empty here means the scan lied
+                  "found at least one entry": Array.isArray(rows) && rows.length>0,
+                  "rows carry kind/where/name/state": Array.isArray(rows) &&
+                    rows.every(r => r.kind && r.where && r.name && r.state),
+                  "kinds are the macOS vocabulary": Array.isArray(rows) &&
+                    rows.every(r => ["agent","daemon","login"].includes(r.kind)),
+                };
+                for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+                if (Array.isArray(rows)) console.log(`  ${rows.length} entries, ` +
+                  `${rows.filter(r=>r.suspect).length} suspect, ` +
+                  `${rows.filter(r=>r.kind==="login").length} login items`);
+                process.exit(bad?1:0);
+              });
+            }).on("error", e => { console.error("startup unreachable: " + e.message); process.exit(1); });
+          '
           kill $BRIDGE 2>/dev/null || true
+
+      # The clipboard watcher against the REAL pasteboard: pbcopy something after it starts and
+      # the row must land in the jsonl with the right shape. If pbcopy cannot reach a pasteboard
+      # in this session, that failure is itself the finding this step exists to surface.
+      - name: Clipboard watcher logs a real copy
+        if: always()
+        run: |
+          printf 'baseline-before-watching' | pbcopy
+          node clipwatch-posix.js --out /tmp/clip-live.jsonl --poll 300 &
+          WATCH=$!
+          sleep 1.5
+          printf 'the quick brown fox jumped over the vitals bridge' | pbcopy
+          sleep 1.5
+          kill $WATCH 2>/dev/null || true
+          echo "--- rows ---"; cat /tmp/clip-live.jsonl 2>/dev/null || echo "(no file)"
+          node -e '
+            const fs = require("fs");
+            let rows = [];
+            try { rows = fs.readFileSync("/tmp/clip-live.jsonl","utf8").trim().split("\n").filter(Boolean).map(JSON.parse); }
+            catch (e) { console.error("no rows were written: " + e.message); process.exit(1); }
+            let bad = 0;
+            const r = rows[rows.length-1] || {};
+            const need = {
+              "exactly one row (baseline copy NOT logged)": rows.length === 1,
+              "kind is text": r.kind === "text",
+              "the copied text was captured": /quick brown fox/.test(r.text || ""),
+              "not flagged secret": r.secret === false,
+              "sha present (12 hex)": /^[0-9A-F]{12}$/.test(r.sha || ""),
+            };
+            for (const [k,v] of Object.entries(need)) { console.log((v?"  ok   ":"  MISS ")+k); if(!v) bad++; }
+            process.exit(bad ? 1 : 0);
+          '
 
       - name: Sudo is available (the elevated paths are testable here)
         if: always()

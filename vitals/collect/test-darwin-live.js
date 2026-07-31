@@ -38,7 +38,10 @@ function near(a, b, tol) { return typeof a === 'number' && Math.abs(a - b) <= to
 
 console.log(`${sh('sw_vers -productName')} ${sh('sw_vers -productVersion')} on ${sh('uname -m')}`);
 console.log(`node ${process.versions.node}`);
-console.log('collecting for 6 seconds...\n');
+/* 8 s, not 6: the block-storage split needs its SECOND ioreg poll (cadence 5 ticks) before the
+   read/write fields can be anything but null, and testing only their null state would prove
+   nothing about the differencing. */
+console.log('collecting for 8 seconds...\n');
 
 let statics = null;
 const ticks = [];
@@ -107,10 +110,27 @@ setTimeout(() => {
 
   console.log('\n--- disk io ---');
   console.log(`  ${JSON.stringify(t.disk.io)}`);
-  check('readMBs/writeMBs are NULL not 0 (iostat gives combined only)',
-    t.disk.io.readMBs === null && t.disk.io.writeMBs === null);
+  /* The split comes from IOBlockStorageDriver, differenced across two ioreg polls. Whether the
+     driver class exists here is the machine's fact, not ours: if ioreg reports it, the split must
+     be numbers by now; if not, it must be null - and 0.00 on a machine whose ioreg says nothing
+     would be the plausible-zero lie. */
+  const blkThere = +sh('ioreg -rc IOBlockStorageDriver 2>/dev/null | grep -c "Bytes (Read)"') > 0;
+  if (blkThere) {
+    check('read/write split PRESENT (ioreg publishes Bytes (Read) here)',
+      typeof t.disk.io.readMBs === 'number' && t.disk.io.readMBs >= 0 &&
+      typeof t.disk.io.writeMBs === 'number' && t.disk.io.writeMBs >= 0,
+      `${t.disk.io.readMBs}/${t.disk.io.writeMBs}`);
+  } else {
+    check('read/write split NULL (this host\'s ioreg has no block statistics)',
+      t.disk.io.readMBs === null && t.disk.io.writeMBs === null);
+  }
   check('busyPct NULL not 0', t.disk.io.busyPct === null);
   check('combinedMBs is a number', typeof t.disk.io.combinedMBs === 'number', t.disk.io.combinedMBs);
+  console.log(`  devices: ${JSON.stringify(t.disk.devices)}`);
+  check('per-device rows present, named like diskN',
+    Array.isArray(t.disk.devices) && t.disk.devices.length > 0 &&
+    t.disk.devices.every((d) => /^disk\d+$/.test(d.id)),
+    JSON.stringify(t.disk.devices && t.disk.devices.map((d) => d.id)));
 
   console.log('\n--- network ---');
   console.log(`  rx ${t.net.rxMBs}  tx ${t.net.txMBs} MB/s`);
@@ -147,8 +167,50 @@ setTimeout(() => {
     if (t.pwr.charging) check('rateW is POSITIVE while charging', t.pwr.rateW === null || t.pwr.rateW > 0, t.pwr.rateW);
   }
 
-  console.log('\n--- gpu (expected absent) ---');
-  check('gpu null, not zeroed', t.gpu === null && t.gpus === null);
+  console.log('\n--- per-core cpu ---');
+  console.log(`  cores: ${JSON.stringify(t.cpu.cores)}`);
+  check('per-core array matches the logical count by the last tick',
+    Array.isArray(t.cpu.cores) && t.cpu.cores.length === os.cpus().length,
+    `${t.cpu.cores.length} vs ${os.cpus().length}`);
+  check('per-core values are null or 0-100, and not all identical copies of the total',
+    t.cpu.cores.every((v) => v === null || (v >= 0 && v <= 100)) &&
+    !(t.cpu.cores.length > 1 && t.cpu.cores.every((v) => v === t.cpu.total)));
+
+  console.log('\n--- memory pressure ---');
+  check('pressure is null or the kernel\'s own 1/2/4',
+    t.mem.pressure === null || [1, 2, 4].includes(t.mem.pressure), String(t.mem.pressure));
+
+  console.log('\n--- per-interface rates ---');
+  check('ifaces is an array by the last tick', Array.isArray(t.net.ifaces),
+    JSON.stringify(t.net.ifaces && t.net.ifaces.map((i) => i.id)));
+
+  console.log('\n--- per-process faults (top join) ---');
+  const withPf = t.proc.filter((p) => p.pf !== null);
+  console.log(`  rows with pf: ${withPf.length} of ${t.proc.length}`);
+  check('pf values are non-negative integers where present',
+    withPf.every((p) => Number.isInteger(p.pf) && p.pf >= 0));
+  /* top runs on every Mac; if its header parsed, most of the ps top-16 should have joined. A
+     total miss means the PID/FAULTS shape assumption is wrong - the finding CI exists to make. */
+  check('the top-faults join actually landed (some rows carry pf)', withPf.length > 0,
+    withPf.length === 0 ? 'parseTopFaults refused the header - capture `top -l 1 -stats pid,faults`' : withPf.length);
+
+  console.log('\n--- wake assertions ---');
+  console.log(`  ${JSON.stringify(t.wake)}`);
+  check('wake is null (not yet polled) or an array of {pid,name,kind}',
+    t.wake === null || (Array.isArray(t.wake) &&
+      t.wake.every((w) => Number.isInteger(w.pid) && w.name && w.kind)));
+
+  console.log('\n--- gpu (present only where IOAccelerator answers) ---');
+  console.log(`  ${JSON.stringify(t.gpus)}`);
+  const accThere = +sh('ioreg -rc IOAccelerator 2>/dev/null | grep -c "Device Utilization"') > 0;
+  if (accThere) {
+    check('gpu utilisation surfaced (this host\'s ioreg publishes Device Utilization %)',
+      !!t.gpus && typeof t.gpus.max === 'number' && t.gpus.max >= 0 && t.gpus.max <= 100,
+      t.gpus && t.gpus.max);
+  } else {
+    /* CI runners have a paravirtual GPU with no IOAccelerator statistics - null is the truth. */
+    check('gpu null where ioreg has no utilisation key, not zeroed', t.gpu === null && t.gpus === null);
+  }
 
   console.log('\n--- tick contract ---');
   for (const k of ['t', 'ts', 'cpu', 'mem', 'disk', 'net', 'proc', 'pwr', 'self', 'up']) {
@@ -157,7 +219,7 @@ setTimeout(() => {
   check('uptime is plausible', near(t.up, os.uptime() / 3600, 0.1), `${t.up}h`);
 
   done();
-}, 6200);
+}, 8200);
 
 function done() {
   console.log('');

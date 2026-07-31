@@ -25,7 +25,7 @@
  */
 
 const { _internal } = require('./darwin');
-const { parseVmStat, parseIostatLine } = _internal;
+const { parseVmStat, parseIostatLine, parseTopFaults, parseBlockStats } = _internal;
 
 let fails = 0, checks = 0;
 function check(label, got, want) {
@@ -118,6 +118,33 @@ console.log('');
   check('header line rejected', parseIostatLine('    KB/t  tps  MB/s  us sy id', 1), null);
   check('short line rejected', parseIostatLine(' 1 2', 1), null);
   check('blank line rejected', parseIostatLine('   ', 1), null);
+}
+
+/* ---- top faults: exact-header gate, "+" decoration, preamble ignored. ---- */
+{
+  const top = 'Processes: 500 total\nLoad Avg: 1.0\n\nPID    FAULTS\n1      2000\n442    120000+\n907    5000-\n';
+  const m = parseTopFaults(top);
+  check('faults parsed for 3 pids', m && m.size, 3);
+  check('"+" changing-value decoration stripped', m && m.get(442), 120000);
+  check('"-" decoration stripped too', m && m.get(907), 5000);
+  /* The gate, which is the point: a reordered or widened stats list must refuse, not misread. */
+  check('reordered columns (FAULTS first) refused', parseTopFaults('FAULTS  PID\n2000  1\n'), null);
+  check('extra column (CPU) refused rather than misread as faults',
+    parseTopFaults('PID  CPU  FAULTS\n1  0.5  2000\n'), null);
+  check('empty table refused', parseTopFaults('PID    FAULTS\n'), null);
+  check('garbage refused', parseTopFaults('no table here'), null);
+}
+
+/* ---- block-storage statistics: summed across drivers, absent keys refuse. ---- */
+{
+  const two = '"Statistics" = {"Bytes (Read)"=1000,"Bytes (Written)"=500}\n' +
+              '"Statistics" = {"Bytes (Read)"=200,"Bytes (Written)"=100,"Errors (Read)"=0}';
+  const s = parseBlockStats(two);
+  check('read bytes summed across drivers', s && s.read, 1200);
+  check('written bytes summed', s && s.written, 600);
+  check('no Bytes keys at all -> null (never a zero pretending to be idle disks)',
+    parseBlockStats('"Statistics" = {"Operations (Read)"=12}'), null);
+  check('empty input -> null', parseBlockStats(''), null);
 }
 
 console.log('');

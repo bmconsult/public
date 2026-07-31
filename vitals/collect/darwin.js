@@ -27,9 +27,12 @@
  *      run inside a single `sh -c` with delimiters between their outputs, so the per-second cost is
  *      one fork instead of three.
  *
- * WHAT IS DELIBERATELY ABSENT. No GPU utilisation (needs powermetrics, which requires root) and no
- * per-process disk I/O (needs fs_usage, root, and on some releases SIP disabled). Those are declared
- * false in caps.js and the panel omits the features rather than drawing empty gauges.
+ * WHAT IS DELIBERATELY ABSENT. Per-process disk I/O (needs fs_usage, root, and on some releases
+ * SIP disabled), per-process GPU (Activity Monitor reads it through private API), and CPU
+ * temperature (IOKit/powermetrics, root). Declared false in caps.js; the panel omits the features
+ * rather than drawing empty gauges. GPU utilisation is NOT absent - IOAccelerator publishes it
+ * without root, see pollGpu - an earlier version of this header said otherwise, which is the
+ * "comment nobody re-checked" failure this file documents at the per-core block.
  */
 
 const { spawn, execFile } = require('child_process');
@@ -54,6 +57,11 @@ function realSh(cmd, cb) {
  * the fixture and the identical suite becomes verification. See tools/capture-macos-fixtures.sh. */
 let sh = realSh;
 let spawnIostat = () => spawn('iostat', ['-w', '1']);
+
+/* Poll cadences in TICKS, per slow source. Module-level and injectable so the simulation can
+   compress them: differencing logic that only fires every 15th tick would otherwise be untestable
+   inside a three-tick run, and untested differencing is where this collector's bugs have lived. */
+let CAD = { pwr: 15, vol: 10, gpu: 5, wake: 30, faults: 15, blk: 5 };
 
 /* ---------------- per-core CPU ----------------
  * os.cpus() carries per-core cumulative tick counters on Darwin - libuv fills them from
@@ -87,7 +95,48 @@ function perCore() {
     return Math.max(0, Math.min(100, Math.round(((dTotal - dIdle) / dTotal) * 100)));
   });
 }
-function _inject(fakeSh, fakeIostat) { sh = fakeSh || realSh; if (fakeIostat) spawnIostat = fakeIostat; }
+function _inject(fakeSh, fakeIostat, cadence) {
+  sh = fakeSh || realSh;
+  if (fakeIostat) spawnIostat = fakeIostat;
+  if (cadence) CAD = { ...CAD, ...cadence };
+}
+
+/* ---------------- top: per-process page faults ----------------
+ * `top -l 1 -stats pid,faults` is the one unprivileged source for per-process fault counts.
+ * The number is CUMULATIVE since process start - which is exactly what the panel's
+ * "Faults (lifetime)" column shows on Windows ('Page Faults/sec'.RawValue is the same lifetime
+ * counter), so no differencing is needed, just the join onto the ps aggregation by pid.
+ *
+ * PARSED BY SHAPE: nothing is read until a header row of exactly PID / FAULTS is found, so if a
+ * macOS release reorders top's columns this returns null and the pf column stays absent - it does
+ * not silently read some other column as a fault count. Interactive top decorates changing values
+ * with trailing +/-; stripped. */
+function parseTopFaults(txt) {
+  const lines = String(txt || '').split('\n');
+  const hi = lines.findIndex((l) => /^\s*PID\s+FAULTS\s*$/.test(l));
+  if (hi < 0) return null;
+  const m = new Map();
+  for (let i = hi + 1; i < lines.length; i++) {
+    const x = /^\s*(\d+)\s+(\d+)[+\-]?\s*$/.exec(lines[i]);
+    if (x) m.set(+x[1], +x[2]);
+  }
+  return m.size ? m : null;
+}
+
+/* ---------------- ioreg: the disk read/write split ----------------
+ * iostat reports combined throughput only. One level upstream, every IOBlockStorageDriver
+ * publishes a Statistics dictionary with cumulative "Bytes (Read)" / "Bytes (Written)" - summed
+ * across drivers and differenced between polls they give the split as an average over the poll
+ * window. Totals only: mapping each driver to its iostat disk name needs an IORegistry parent
+ * walk that is not worth guessing at without hardware; per-device rows keep their nulls. */
+function parseBlockStats(txt) {
+  let read = 0, written = 0, seen = false;
+  for (const m of String(txt || '').matchAll(/"Bytes \((Read|Written)\)"\s*=\s*(\d+)/g)) {
+    seen = true;
+    if (m[1] === 'Read') read += +m[2]; else written += +m[2];
+  }
+  return seen ? { read, written } : null;
+}
 
 /* ---------------- vm_stat ----------------
  * Output is "Pages free:  123456." - note the trailing period, which breaks parseInt if the line is
@@ -313,6 +362,37 @@ function start(root, { onStatic, onTick, onError }) {
    * admin rights. Windows needs an elevated `powercfg /requests` for the same answer, so this is
    * one of the places the Mac build can say something the Windows one cannot.
    * Thirty-second cadence: sleep blockers are held for minutes or hours, not milliseconds. */
+  /* Cumulative per-pid fault counts, joined onto the ps rows at tick time. Null until top has
+     answered in the expected shape; a pid top did not list contributes nothing rather than zero. */
+  let faultsCache = null;
+  function pollFaults() {
+    sh('top -l 1 -stats pid,faults 2>/dev/null', (out) => {
+      if (stopped) return;
+      faultsCache = parseTopFaults(out);
+    });
+  }
+
+  /* Read/write split, differenced between polls. prevBlk holds the last cumulative sample. */
+  let blkCache = null, prevBlk = null;
+  function pollBlk() {
+    sh('ioreg -rc IOBlockStorageDriver 2>/dev/null | grep "Bytes"', (out) => {
+      if (stopped) return;
+      const cur = parseBlockStats(out);
+      if (!cur) { blkCache = null; prevBlk = null; return; }
+      const now = process.hrtime.bigint();
+      if (prevBlk) {
+        const secs = Number(now - prevBlk.at) / 1e9;
+        if (secs > 0) {
+          blkCache = {
+            readMBs: Math.round(Math.max(0, cur.read - prevBlk.read) / 1048576 / secs * 100) / 100,
+            writeMBs: Math.round(Math.max(0, cur.written - prevBlk.written) / 1048576 / secs * 100) / 100,
+          };
+        }
+      }
+      prevBlk = { ...cur, at: now };
+    });
+  }
+
   let wakeCache = null;
   function pollAssertions() {
     sh('pmset -g assertions 2>/dev/null | head -40', (out) => {
@@ -333,10 +413,12 @@ function start(root, { onStatic, onTick, onError }) {
   function sample() {
     if (stopped) return;
     tick++;
-    if (tick % 15 === 1) pollPower();
-    if (tick % 10 === 1) pollVolumes();
-    if (tick % 5 === 1) pollGpu();
-    if (tick % 30 === 1) pollAssertions();
+    if (tick % CAD.pwr === 1) pollPower();
+    if (tick % CAD.vol === 1) pollVolumes();
+    if (tick % CAD.gpu === 1) pollGpu();
+    if (tick % CAD.wake === 1) pollAssertions();
+    if (tick % CAD.faults === 1) pollFaults();
+    if (tick % CAD.blk === 1) pollBlk();
 
     /* ONE fork for all three. See the header note. */
     /* Still ONE fork. sysctl is appended to the same command rather than forked separately - the
@@ -412,9 +494,21 @@ function start(root, { onStatic, onTick, onError }) {
            Divided here so one number means one thing across all three plugs.
            UNVERIFIED on hardware: this rests on ps's documented semantics, not observed output. */
         const threads = os.cpus().length || 1;
+        /* Lifetime faults per GROUP: the sum over its pids of top's cumulative counts. A group
+           none of whose pids appeared in top's table reports null - "not measured", which is a
+           different claim from 0, "this process has never faulted". */
+        const pf = (pids) => {
+          if (!faultsCache) return null;
+          let sum = 0, hit = false;
+          for (const pid of pids) {
+            const f = faultsCache.get(pid);
+            if (f !== undefined) { sum += f; hit = true; }
+          }
+          return hit ? sum : null;
+        };
         const procOut = [...agg.values()].map((a) => ({
           n: a.n, mb: Math.round(a.mb), cpu: Math.round((a.cpu / threads) * 10) / 10,
-          ioMBs: null, rMBs: null, wMBs: null, pf: null, count: a.count, pids: a.pids,
+          ioMBs: null, rMBs: null, wMBs: null, pf: pf(a.pids), count: a.count, pids: a.pids,
         })).sort((x, y) => y.mb - x.mb);
 
         /* netstat -ib repeats each interface once per address family; the first row per interface
@@ -478,9 +572,13 @@ function start(root, { onStatic, onTick, onError }) {
           disk: {
             /* null, not [] - an empty array renders as "this machine has no disks". */
             vols: volCache,
-            /* iostat gives combined throughput only; read and write are not split, and busy time is
-               not exposed at all without ioreg spelunking. Nulls, not zeros. */
-            io: { readMBs: null, writeMBs: null, combinedMBs: Math.round(diskMBs * 100) / 100,
+            /* combinedMBs is per-second from the iostat stream. The read/write split comes from
+               IOBlockStorageDriver cumulative bytes, differenced - null until TWO ioreg samples
+               exist, and an AVERAGE over the poll window rather than this second's figure. Busy
+               time and queue depth genuinely are not exposed unprivileged: nulls, not zeros. */
+            io: { readMBs: blkCache ? blkCache.readMBs : null,
+                  writeMBs: blkCache ? blkCache.writeMBs : null,
+                  combinedMBs: Math.round(diskMBs * 100) / 100,
                   busyPct: null, queue: null },
             /* Per-device throughput, zipped from the iostat header names and the column triples.
                Null until the stream's first data line - same three-state rule as everything else. */
@@ -529,4 +627,4 @@ function start(root, { onStatic, onTick, onError }) {
   };
 }
 
-module.exports = { start, _inject, _internal: { parseVmStat, parseIostatLine } };
+module.exports = { start, _inject, _internal: { parseVmStat, parseIostatLine, parseTopFaults, parseBlockStats } };
