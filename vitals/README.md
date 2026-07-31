@@ -75,18 +75,34 @@ What you get:
 
 ## Download
 
-Portable bundles carry their own Node runtime — nothing to install on any platform. Grab one from
-**[Releases](https://github.com/bmconsult/public/releases)**, unpack, run Setup:
+Portable bundles carry their own Node runtime — **nothing to install first, on any platform.** Each
+link downloads directly; unpack it and run Setup.
 
-| Platform | Bundle | Size | Then |
+| | Download | Size | Then |
 |---|---|---|---|
-| Windows x64 | `vitals-0.9.0-win-x64.zip` | ~35 MB | Extract → double-click **`Setup.cmd`** |
-| Windows ARM64 | `vitals-0.9.0-win-arm64.zip` | ~31 MB | Extract → double-click **`Setup.cmd`** |
-| macOS Apple Silicon | `vitals-0.9.0-mac-arm64.tar.gz` | ~39 MB | `tar -xzf`, then `./setup.sh` |
-| macOS Intel | `vitals-0.9.0-mac-x64.tar.gz` | ~40 MB | `tar -xzf`, then `./setup.sh` |
-| Linux x64 | `vitals-0.9.0-linux-x64.tar.gz` | ~44 MB | `tar -xzf`, then `./setup.sh` |
+| **Windows** | **[⬇ vitals-0.9.0-win-x64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/vitals-0.9.0-win-x64.zip)** | 35 MB | Extract → double-click **`Setup.cmd`** |
+| Windows on ARM | [⬇ vitals-0.9.0-win-arm64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/vitals-0.9.0-win-arm64.zip) | 31 MB | Extract → double-click **`Setup.cmd`** |
+| **macOS** (M1–M4) | **[⬇ vitals-0.9.0-mac-arm64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/vitals-0.9.0-mac-arm64.tar.gz)** | 39 MB | `tar -xzf …`, then `./setup.sh` |
+| macOS (Intel) | [⬇ vitals-0.9.0-mac-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/vitals-0.9.0-mac-x64.tar.gz) | 40 MB | `tar -xzf …`, then `./setup.sh` |
+| **Linux** | **[⬇ vitals-0.9.0-linux-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/vitals-0.9.0-linux-x64.tar.gz)** | 44 MB | `tar -xzf …`, then `./setup.sh` |
 
-SHA-256 checksums ship alongside the bundles as `SHA256SUMS.txt`.
+<details>
+<summary><b>Not sure which one?</b></summary>
+
+- **Windows** — take the first one. Almost every PC is x64. Only take *Windows on ARM* if you know
+  you have a Snapdragon machine (Surface Pro X and similar); if you are not sure, you don't.
+- **macOS** — any Mac from late 2020 onwards is Apple Silicon (M1, M2, M3, M4). Older Macs are
+  Intel. Apple menu → About This Mac tells you in one line.
+- **Linux** — x64 covers desktop and laptop machines. There is no ARM build yet.
+
+Picked the wrong one? Nothing breaks — it simply will not start, and no installer has touched
+anything, because there is no installer.
+
+</details>
+
+Every bundle is listed with its SHA-256 in
+[`SHA256SUMS.txt`](https://github.com/bmconsult/public/releases/download/vitals-v0.9.0/SHA256SUMS.txt),
+and the build is reproducible — rebuild from source with `node bundle.js` and you get the same hashes.
 
 > On macOS and Linux use the `.tar.gz` — zip does not carry the executable bit.
 > The binaries are **unsigned**; Windows SmartScreen and macOS Gatekeeper will warn accordingly.
