@@ -67,7 +67,28 @@ function diagnose(tick, hist, extra = {}) {
   if (!tick) return { findings: [], summary: 'waiting for data', ready: false };
 
   const f = [];
-  const vol = tick.disk.vols.find((v) => v.id === 'C:') || { pct: 0, freeGB: 0, sizeGB: 1 };
+  /* THE SYSTEM VOLUME, cross-platform, and NULL when there is not one.
+     This was `find(v => v.id === 'C:') || { pct: 0, freeGB: 0, sizeGB: 1 }` - two failures sharing
+     a line. The selector only matched Windows, so on Linux and macOS, where the root volume is '/',
+     nothing ever matched. The fallback then described the disk as 0% used with 0 GB free.
+     Every rule below tests `pct >= N`, so a zeroed volume does not fire a WRONG finding - it fires
+     NOTHING, which is worse in the only way this project cares about: the engine silently reports a
+     healthy disk on a machine whose disk is full, and the absence of a finding reads as an all-clear.
+     history.js:59 already selects the root volume properly. Same selection here, and null instead of
+     zeros so a missing volume DISABLES the disk rules rather than answering on their behalf. */
+  const vol = (() => {
+    const v = (tick.disk && tick.disk.vols) || [];
+    return v.find((x) => x.id === 'C:')
+        || v.find((x) => x.id === '/')
+        /* Neither name present (a Windows install on D:, an unusual mount layout): the biggest
+           volume is the best available guess, and it is a guess about WHICH disk, not about its
+           numbers - those are still measured. */
+        || v.slice().sort((a, b) => (b.sizeGB || 0) - (a.sizeGB || 0))[0]
+        || null;
+  })();
+  /* The label every disk finding quotes. Hard-coding "C:" in the prose was the same Windows
+     assumption one layer up: a finding that says "C: is 4% free" on a Mac is wrong twice. */
+  const volId = vol ? vol.id : null;
   const totalRamMB = tick.mem.totalMB;
   const suppress = new Set();
 
@@ -80,7 +101,7 @@ function diagnose(tick, hist, extra = {}) {
   };
 
   /* ---------- 1. the compound spiral (the whole point of this engine) ---------- */
-  const diskTight = vol.pct >= 90;
+  const diskTight = !!vol && vol.pct >= 90;
   const ramTight = hist.sustained('mem', (v) => v >= 80, 120, 0.7);
   const faulting = hist.sustained('hardFaults', (v) => v >= 80, 120, 0.4);
   // pagefile is inferred: committed well above installed means Windows is leaning on disk
@@ -98,7 +119,7 @@ function diagnose(tick, hist, extra = {}) {
         `has no spare blocks left for wear-levelling, so every write it serves is slower than rated. ` +
         `Freeing disk unwinds it from both ends at once.`,
       evidence: [
-        `C: ${vol.freeGB} GB free of ${vol.sizeGB} GB (${(100 - vol.pct).toFixed(1)}% free)`,
+        `${volId} ${vol.freeGB} GB free of ${vol.sizeGB} GB (${(100 - vol.pct).toFixed(1)}% free)`,
         `RAM ${tick.mem.pct}% used, sustained (${ramTight ? Math.round(ramTight.frac * 100) + '% of last 2 min' : 'commit-based'})`,
         `Committed ${gb(tick.mem.committedMB)} GB vs ${gb(totalRamMB)} GB installed`,
         faulting ? `Hard faults averaging ${hist.stat('hardFaults', 120).avg}/s — actively paging to disk` : `Hard faults low right now`,
@@ -114,7 +135,7 @@ function diagnose(tick, hist, extra = {}) {
         steps: [
           { v: `${tick.mem.pct}%`,               l: 'RAM used' },
           { v: `${gb(tick.mem.committedMB)} GB`, l: `committed of ${gb(totalRamMB)}` },
-          { v: `${(100 - vol.pct).toFixed(1)}%`, l: 'C: free' },
+          { v: `${(100 - vol.pct).toFixed(1)}%`, l: `${volId} free` },
           { v: faulting ? `${hist.stat('hardFaults', 120).avg}/s` : `${tick.mem.pagesSec ?? 0}/s`, l: 'hard faults' },
         ],
       },
@@ -122,10 +143,10 @@ function diagnose(tick, hist, extra = {}) {
   }
 
   /* ---------- 2. individual resource pressure ---------- */
-  if (!suppress.has('disk_low') && vol.pct >= 90) {
+  if (vol && !suppress.has('disk_low') && vol.pct >= 90) {
     add({
       id: 'disk_low', sev: vol.pct >= 95 ? S.CRIT : S.WARN,
-      title: `C: is ${(100 - vol.pct).toFixed(1)}% free — below the threshold where SSDs slow down`,
+      title: `${volId} is ${(100 - vol.pct).toFixed(1)}% free — below the threshold where SSDs slow down`,
       because: `Below ~10% free an SSD runs out of spare blocks for wear-levelling and garbage ` +
                `collection; sustained write throughput can fall by more than half. Fully reversible.`,
       evidence: [`${vol.freeGB} GB free of ${vol.sizeGB} GB`],
@@ -329,10 +350,10 @@ function diagnose(tick, hist, extra = {}) {
 
     /* Recycle Bin: reported, never emptied from here. The owner asked for exactly this style to be
      * kept - surface it with the reasoning and let Explorer own the destructive click. */
-    if (typeof mt.recycleGB === 'number' && mt.recycleGB >= 1 && vol.pct >= 88) {
+    if (vol && typeof mt.recycleGB === 'number' && mt.recycleGB >= 1 && vol.pct >= 88) {
       add({
         id: 'recycle_full', sev: vol.pct >= 95 ? S.WARN : S.INFO,
-        title: `${mt.recycleGB} GB is sitting in the Recycle Bin while C: is ${(100 - vol.pct).toFixed(1)}% free`,
+        title: `${mt.recycleGB} GB is sitting in the Recycle Bin while ${volId} is ${(100 - vol.pct).toFixed(1)}% free`,
         because: `Deleted files still occupy their blocks until the bin is emptied, so this space is ` +
                  `already yours - it is just not free yet. Cheapest reclaim available, and the only ` +
                  `one that needs no judgement about what the files are for.`,
@@ -380,11 +401,22 @@ function diagnose(tick, hist, extra = {}) {
       const perDay = top.deltaGB / Math.max(g.spanDays, 0.04);
       add({
         id: 'growth', sev: S.WARN,
-        title: `${top.path.split('\\').pop()} grew ${top.deltaGB} GB over the last ${g.spanDays < 1 ? Math.round(g.spanDays * 24) + ' hours' : g.spanDays.toFixed(1) + ' days'}`,
-        because: `Comparing two MFT snapshots. Net change across the volume was ` +
-                 `${g.netGB > 0 ? '+' : ''}${g.netGB} GB. At ${perDay.toFixed(2)} GB/day this ` +
-                 `directory alone fills your remaining ${vol.freeGB} GB in ` +
-                 `${Math.max(1, Math.round(vol.freeGB / Math.max(perDay, 0.01)))} days.`,
+        /* Split on BOTH separators. This was `split('\\')` - the same hard-coded backslash that
+           History.growth() had to lose for posix snapshots, still here one file away. On Linux and
+           macOS it finds nothing to split, so the "leaf" is the entire path and the title reads as
+           a wall of directories instead of a folder name. */
+        title: `${top.path.split(/[\\/]/).filter(Boolean).pop()} grew ${top.deltaGB} GB over the last ${g.spanDays < 1 ? Math.round(g.spanDays * 24) + ' hours' : g.spanDays.toFixed(1) + ' days'}`,
+        /* The runway clause is CONDITIONAL on knowing the free space. `vol` is now legitimately
+           null when no volume was identified, and this rule never guarded it - it read vol.freeGB
+           unconditionally and was only safe because the old fallback handed it a zero. The
+           attribution ("this folder grew 19 GB") is still worth saying without a runway; the
+           runway is not worth inventing. */
+        because: `Comparing two snapshots. Net change across the volume was ` +
+                 `${g.netGB > 0 ? '+' : ''}${g.netGB} GB. At ${perDay.toFixed(2)} GB/day` +
+                 (vol && typeof vol.freeGB === 'number'
+                   ? ` this directory alone fills your remaining ${vol.freeGB} GB in ` +
+                     `${Math.max(1, Math.round(vol.freeGB / Math.max(perDay, 0.01)))} days.`
+                   : `, sustained.`),
         evidence: [top.path, ...g.grew.slice(1, 4).map((r) => `${r.path} ${r.deltaGB > 0 ? '+' : ''}${r.deltaGB} GB`)],
         action: 'Growth tab for the full list.',
         confidence: 'high',
@@ -405,7 +437,7 @@ function diagnose(tick, hist, extra = {}) {
    * ledger's SUPPRESSORS map knows disk_low/spiral absorb this finding, so the handover is
    * recorded as absorption, not as a "cleared" at the exact moment things got worse. */
   const tr = extra.trend && extra.trend.diskFree;
-  if (tr && vol.pct > 0 && vol.pct < 90 && vol.sizeGB > 1) {
+  if (tr && vol && vol.pct > 0 && vol.pct < 90 && vol.sizeGB > 1) {
     const rate = -tr.perDay;                          // GB LOST per day; positive = filling
     const wallGB = vol.sizeGB * 0.10;                 // the 10%-free line disk_low fires at
     const gbAbove = vol.freeGB - wallGB;
