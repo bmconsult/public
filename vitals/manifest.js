@@ -40,6 +40,10 @@ const FILES = [
   'INSTALL.md', 'INSTALL_FOR_CLAUDE.md', 'USING.md', 'LICENSE', 'NOTICE.md',
   // tools
   'tools/capture-macos-fixtures.sh',
+  // the native macOS panel host - source, not a binary. It is compiled by CI (and by anyone with
+  // Xcode command line tools) rather than shipped built, because an unsigned binary downloaded
+  // from the internet is worse than one you built yourself thirty seconds ago.
+  'mac/VitalsHost.swift',
 ];
 
 /* Files that belong in the SOURCE REPOSITORY but not in a user's install: the build itself.

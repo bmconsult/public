@@ -66,6 +66,9 @@ let spawnIostat = () => spawn('iostat', ['-w', '1']);
  *   - A core whose counters did not advance returns null, not 0. No elapsed ticks means the load
  *     is unknowable for that interval; 0 would claim it was idle. */
 let prevCores = null;
+/* Previous per-NIC byte totals, keyed by interface, for rate differencing. Module scope for the
+   same reason prevCores is: the tick is a callback and the sample before it has to outlive it. */
+let prevNics = new Map();
 
 function perCore() {
   const now = os.cpus().map(({ times: t }) => ({
@@ -253,22 +256,93 @@ function start(root, { onStatic, onTick, onError }) {
   }
   pollVolumes();
 
+  /* -------- GPU, without root --------
+   * IOAccelerator publishes a PerformanceStatistics dictionary containing "Device Utilization %".
+   * It is where Activity Monitor's GPU history comes from, both the Apple Silicon AGX driver and
+   * the Intel/AMD ones expose it, and reading it needs no privileges - so this does not require
+   * powermetrics, which does.
+   *
+   * Polled every ~5 s, not per tick: ioreg walks the entire IO registry and is far too expensive
+   * for a 1 Hz loop. Same reasoning that keeps the battery poll at 15 ticks.
+   *
+   * THE KEY NAMES HERE ARE UNVERIFIED. They come from documentation, which is exactly the way this
+   * collector acquired its previous mistakes. CI captures raw ioreg output as an artifact on every
+   * run so this parser gets corrected against real bytes; until it agrees with a real Mac, gpu
+   * stays false in caps.js and this cache stays unread by the manifest. A missing key yields null,
+   * never 0 - a GPU reported idle while it renders is the exact failure caps.js was built over. */
+  let gpuCache = null;
+  function pollGpu() {
+    sh('ioreg -rc IOAccelerator 2>/dev/null | grep -E "Device Utilization|IOClass" | head -40', (out) => {
+      if (stopped) return;
+      const utils = [...String(out || '').matchAll(/"Device Utilization %"\s*=\s*(\d+)/g)].map((m) => +m[1]);
+      if (!utils.length) { gpuCache = null; return; }
+      const ads = utils.map((u, i) => ({ id: 'gpu' + i, name: null, util: u }));
+      gpuCache = { ads, top: ads.reduce((a, b) => (b.util > a.util ? b : a)), max: Math.max(...utils) };
+    });
+  }
+
+  /* -------- what is holding this machine awake --------
+   * `pmset -g assertions` names the PROCESS preventing idle or display sleep, by pid, with no
+   * admin rights. Windows needs an elevated `powercfg /requests` for the same answer, so this is
+   * one of the places the Mac build can say something the Windows one cannot.
+   * Thirty-second cadence: sleep blockers are held for minutes or hours, not milliseconds. */
+  let wakeCache = null;
+  function pollAssertions() {
+    sh('pmset -g assertions 2>/dev/null | head -40', (out) => {
+      if (stopped) return;
+      const txt = String(out || '');
+      if (!txt.trim()) { wakeCache = null; return; }
+      const holders = [];
+      for (const line of txt.split('\n')) {
+        /* pid 123(Some App): [0x...] 00:12:34 PreventUserIdleSystemSleep named: "..." */
+        const m = /pid\s+(\d+)\(([^)]+)\):.*?(PreventUserIdleSystemSleep|PreventUserIdleDisplaySleep|PreventSystemSleep)/.exec(line);
+        if (m) holders.push({ pid: +m[1], name: m[2], kind: m[3] });
+      }
+      wakeCache = holders.length ? holders.slice(0, 8) : [];
+    });
+  }
+
   /* -------- the tick -------- */
   function sample() {
     if (stopped) return;
     tick++;
     if (tick % 15 === 1) pollPower();
     if (tick % 10 === 1) pollVolumes();
+    if (tick % 5 === 1) pollGpu();
+    if (tick % 30 === 1) pollAssertions();
 
     /* ONE fork for all three. See the header note. */
-    sh('vm_stat; echo "---PS---"; ps -Ao pid,rss,%cpu,comm; echo "---NET---"; netstat -ib', (out) => {
+    /* Still ONE fork. sysctl is appended to the same command rather than forked separately - the
+       header's whole argument is that a monitor sampling once a second cannot afford a process per
+       metric, and that argument does not stop applying because a new metric arrived. */
+    sh('vm_stat; echo "---PS---"; ps -Ao pid,rss,%cpu,comm; echo "---NET---"; netstat -ib; '
+       + 'echo "---SYS---"; sysctl -n vm.swapusage kern.memorystatus_vm_pressure_level 2>/dev/null', (out) => {
       if (stopped) return;
       try {
         const now = process.hrtime.bigint();
         const elapsed = Number(now - prevAt) / 1e9;
         prevAt = now;
 
-        const [vmTxt = '', psTxt = '', netTxt = ''] = out.split(/---PS---|---NET---/);
+        const [vmTxt = '', psTxt = '', netTxt = '', sysTxt = ''] = out.split(/---PS---|---NET---|---SYS---/);
+
+        /* COMMIT CHARGE, honestly approximated. macOS has no such counter - the kernel does not
+           promise backing store the way Windows does, so there is nothing to report as its twin.
+           The nearest true statement is "resident used plus what has been pushed to swap", i.e.
+           how much memory this machine has actually had to find. caps.js marks it 'partial' and
+           says so; it is not filed as the Windows number under a shared name.
+           Null when sysctl says nothing, because a machine with swap disabled is not a machine
+           with zero swap pressure - it is a machine that cannot tell us. */
+        const swapLine = (sysTxt || '').split('\n').find((l) => /used\s*=/.test(l)) || '';
+        const swapM = /used\s*=\s*([\d.]+)([MGK])/i.exec(swapLine);
+        const swapUsedMB = swapM
+          ? +swapM[1] * ({ K: 1 / 1024, M: 1, G: 1024 }[swapM[2].toUpperCase()] || 1)
+          : null;
+        /* Apple's own memory verdict: 1 normal, 2 warning, 4 critical. This is the number Activity
+           Monitor's pressure graph is drawn from, and it is a better answer to "does this machine
+           need more RAM" than any percentage - which is an argument this product already makes
+           about hard faults on Windows. */
+        const pressureRaw = (sysTxt || '').split('\n').map((l) => l.trim()).filter(Boolean).pop();
+        const pressure = /^\d+$/.test(pressureRaw || '') ? +pressureRaw : null;
         const vm = parseVmStat(vmTxt);
         const pg = vm.pageSize;
         const mb = (pages) => ((pages || 0) * pg) / 1048576;
@@ -319,6 +393,11 @@ function start(root, { onStatic, onTick, onError }) {
         /* netstat -ib repeats each interface once per address family; the first row per interface
            carries the byte totals, so later duplicates are skipped rather than summed. */
         let rx = 0, tx = 0; const seen = new Set();
+        /* PER-INTERFACE, kept rather than summed away. This loop already visited every NIC and
+           de-duplicated it; the totals were the only thing that survived. Holding the rows costs
+           nothing and is the whole of net.perInterface - "not ported" was never true here, the
+           data was being parsed and discarded on the same line. */
+        const nics = [];
         for (const line of netTxt.split('\n').slice(1)) {
           const p = line.trim().split(/\s+/);
           if (p.length < 10) continue;
@@ -327,7 +406,21 @@ function start(root, { onStatic, onTick, onError }) {
           const ib = +p[p.length - 5], ob = +p[p.length - 2];
           if (!Number.isFinite(ib) || !Number.isFinite(ob)) continue;
           seen.add(nic); rx += ib; tx += ob;
+          nics.push({ id: nic, rxBytes: ib, txBytes: ob });
         }
+        /* Rates per interface, differenced against the previous tick. A NIC that appeared since the
+           last tick (VPN up, cable in) has no previous sample, so its rate is null rather than a
+           spike computed from a zero baseline - the same rule the totals already follow. */
+        const nicOut = nics.map((n) => {
+          const p = prevNics.get(n.id);
+          const rate = (a, b) => (p && elapsed > 0 ? Math.max(0, (a - b)) / 1048576 / elapsed : null);
+          return {
+            id: n.id,
+            rxMBs: p ? Math.round(rate(n.rxBytes, p.rxBytes) * 100) / 100 : null,
+            txMBs: p ? Math.round(rate(n.txBytes, p.txBytes) * 100) / 100 : null,
+          };
+        });
+        prevNics = new Map(nics.map((n) => [n.id, n]));
 
         /* NULL, not 0. If iostat is missing, was killed, or has not emitted its first data line,
            a 0 here reports a perfectly idle CPU forever - confidently, with no gate to hide it.
@@ -347,7 +440,10 @@ function start(root, { onStatic, onTick, onError }) {
           cpu: { total: cpuPct, cores: perCore() },
           mem: {
             usedMB, freeMB: totalMB - usedMB, totalMB,
-            committedMB: null,
+            committedMB: swapUsedMB == null ? null : Math.round(usedMB + swapUsedMB),
+            swapUsedMB: swapUsedMB == null ? null : Math.round(swapUsedMB),
+            /* 1 normal · 2 warning · 4 critical, straight from the kernel. Null where unavailable. */
+            pressure,
             pct: Math.round((usedMB / totalMB) * 1000) / 10,
             cacheMB: Math.round(mb(vm['File-backed pages'])),
             pagesSec,
@@ -366,9 +462,19 @@ function start(root, { onStatic, onTick, onError }) {
           net: {
             rxMBs: prevNet ? Math.round(Math.max(0, rx - prevNet.rx) / 1048576 / elapsed * 1000) / 1000 : null,
             txMBs: prevNet ? Math.round(Math.max(0, tx - prevNet.tx) / 1048576 / elapsed * 1000) / 1000 : null,
+            /* Per-interface rates. Empty array only before the first difference exists; after that
+               a machine with no NICs genuinely has none. */
+            ifaces: nicOut,
           },
           proc: procOut.slice(0, 16),
-          gpu: null, gpus: null,
+          /* Null until ioreg has actually answered - the panel's three-state rule: a value, a real
+             zero, or "this host cannot measure that". Never a placeholder zero. */
+          gpu: gpuCache
+            ? { util: gpuCache.max, memUsed: null, memTotal: null, temp: null, watts: null }
+            : null,
+          gpus: gpuCache,
+          /* Which process is keeping this Mac awake. Null = not polled yet; [] = nothing is. */
+          wake: wakeCache,
           pwr: prevPwr,
           /* NOT zeros. The FOOTPRINT page says "these numbers include the cost of producing this
              page"; emitting 0.00% cpu / 0 MB there is a measured-looking lie. Null degrades to

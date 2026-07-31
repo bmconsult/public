@@ -129,3 +129,41 @@ jobs:
       - name: Sudo is available (the elevated paths are testable here)
         if: always()
         run: sudo -n true && echo "passwordless sudo: yes" || echo "passwordless sudo: NO"
+
+      # The native panel host. It cannot be compiled on the machine it was written on, so CI is the
+      # only thing standing between "250 lines of Swift" and "250 lines of Swift that build". An
+      # unsigned binary is fine here and for anyone building locally; shipping to strangers needs an
+      # Apple Developer certificate, which is a purchase, not a line of code.
+      - name: Build the native panel host
+        if: always()
+        run: |
+          swiftc -O -o VITALS mac/VitalsHost.swift -framework Cocoa -framework WebKit
+          ls -lh VITALS
+          file VITALS
+
+      - name: Upload the host binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitals-host-${{ matrix.os }}
+          path: vitals/VITALS
+          if-no-files-found: warn
+
+      # Proves the host launches and reaches the bridge rather than merely linking. It is a GUI app
+      # on a headless runner, so this checks it starts and stays up for a few seconds without
+      # crashing - not that anything is drawn. What a window LOOKS like still needs human eyes.
+      - name: Panel host launches without crashing
+        if: always()
+        run: |
+          VITALS_PORT=8791 node bridge.js &
+          sleep 6
+          ./VITALS --port 8791 --no-top &
+          HOSTPID=$!
+          sleep 5
+          if kill -0 $HOSTPID 2>/dev/null; then
+            echo "host still running after 5s (did not crash on launch)"
+            kill $HOSTPID 2>/dev/null || true
+          else
+            echo "HOST EXITED EARLY - check the build step output"
+            exit 1
+          fi
