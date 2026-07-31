@@ -5,13 +5,14 @@
 /* VITALS - macOS COLLECTOR PLUG.
  *
  * ############################################################################################
- * ##  UNVERIFIED. There is no Mac on the bench this was written on. Every field offset and   ##
- * ##  every output format below is taken from documented tool behaviour, NOT from observed   ##
- * ##  output. Nothing here has ever executed on real hardware.                               ##
- * ##                                                                                         ##
- * ##  caps.js declares this platform unverified and the panel says so on screen. The first   ##
- * ##  person to run it should check each number against Activity Monitor, fix what is wrong, ##
- * ##  and flip `verified` in caps.js. Do not remove this banner before that happens.         ##
+ * ##  WRITTEN BLIND, PROVEN IN CI, AWAITING EYES. This was written with no Mac on the       ##
+ * ##  bench, from documented tool behaviour. On 2026-07-31 the live suite ran it on real    ##
+ * ##  Apple Silicon (CI, macos-14 + macos-15) and every cross-check against sysctl, df,     ##
+ * ##  vm_stat and ps passed - the format assumptions held. What has still never happened:   ##
+ * ##  battery, populated-GPU and thermal paths on hardware that has them, and a human       ##
+ * ##  comparing these numbers against Activity Monitor and System Settings > Battery.      ##
+ * ##  Run tools/finish-on-a-mac.sh on a physical Mac; when its evidence comes back clean,   ##
+ * ##  flip `verified` in caps.js and delete this banner. Not before.                        ##
  * ############################################################################################
  *
  * DESIGN. macOS has no /proc, so unlike the Linux plug this one has to shell out. Two decisions

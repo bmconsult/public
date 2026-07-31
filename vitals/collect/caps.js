@@ -164,65 +164,68 @@ const PLATFORMS = {
   },
 
   /* ---------------------------------------------------------------- macOS
-   * WRITTEN, NOT VERIFIED. There is no Mac on this bench, so every entry below is derived from
-   * documented tool output rather than observed behaviour, and the panel says so out loud.
-   *
-   * This is the honest state of a port nobody has run yet. It is shipped because a collector that
-   * announces its own untested status is more useful than no collector, and strictly more honest
-   * than one that pretends. The first person to run it on real hardware should correct this block
-   * and flip `verified`. */
+   * WRITTEN BLIND, THEN PROVEN IN CI. There is no Mac on this bench - every line was derived from
+   * documented tool output - but as of 2026-07-31 the full suite has RUN on real Apple Silicon
+   * (macos-14 + macos-15 runners, all green, first attempt), so entries proven by those runs now
+   * say so individually. What a VM runner cannot have - battery, a populated GPU, thermals, a
+   * human comparing the panel against Activity Monitor - is still unproven, and `verified` below
+   * stays false until a physical Mac's evidence (tools/finish-on-a-mac.sh) comes back. */
   darwin: {
     name: 'macOS',
     collector: 'collect/darwin.js (sysctl, vm_stat, iostat, pmset, ps)',
-    /* Still false, and it stays false until someone runs it on a Mac. What HAS been done is worth
-       stating precisely, because it is not nothing and it is also not verification:
-       collect/test-darwin-sim.js drives the entire collector from fixture text through an injection
-       seam and checks 81 things - the memory arithmetic, ps aggregation, netstat de-duplication,
-       mAh-to-watt-hour conversion with sign, rate differencing across ticks, null discipline, and
-       the tick contract. That suite found three real defects: installed RAM was read from two
-       different sources that could disagree, and the df parser located the mount point with
-       indexOf, which for the root volume matched "/dev/..." at index 0 and SILENTLY DROPPED THE
-       MAIN DISK. Both fixed.
-       So: the logic is tested, the format assumption is not. Only a Mac settles the latter. */
+    /* Still false - but the reason has narrowed. The 87-check simulation proved the LOGIC (and
+       found three real defects, including a df parser that silently dropped the root volume); on
+       2026-07-31 CI proved the FORMAT assumptions on real Apple Silicon, live, cross-checked
+       against sysctl/df/ps. What `verified` still waits for is the part a VM cannot supply:
+       battery internals, a GPU that publishes IOAccelerator statistics, thermals, and human eyes
+       agreeing with Activity Monitor and System Settings. Run tools/finish-on-a-mac.sh on a
+       physical Mac; it banks all of that, screenshots included. Then this becomes a dated
+       sentence naming the hardware, like the Linux block's. */
     verified: false,
-    verifyNote: 'UNVERIFIED on hardware - written from documented tool output, never executed on a ' +
-                'Mac. The collector LOGIC is covered by 81 simulation checks (collect/test-darwin-sim.js), ' +
-                'but whether macOS really emits the assumed formats is untested. CI now runs the live ' +
-                'suite on real Darwin (macos-14 + macos-15) on every push; this note and the flags ' +
-                'below change when it goes green, and not before.',
-    /* IMPLEMENTED BUT NOT YET FLIPPED. cpu.perCore is written and works - os.cpus() carries
-       per-core tick counters on Darwin, so it never needed the native addon the collector's own
-       comment claimed - but a flag here means "verified on this platform", not "the code exists".
-       It flips when the CI live suite reports per-core values that agree with an independent
-       source, which is the same standard every other true in this file was held to. Writing the
-       code and flipping the flag are deliberately two separate acts. */
+    verifyNote: 'PARTIALLY VERIFIED. On 2026-07-31 the full CI suite went green on real Apple ' +
+                'Silicon, first try, both runners (macos-14 + macos-15): the live collector ' +
+                'cross-checked against sysctl/df/ps, the bridge serving measured samples, ' +
+                '/api/conns and /api/startup answering with real rows, a real pbcopy round-trip, ' +
+                'the growth walker over a real Darwin home, and the Swift host compiled and ' +
+                'launched. Flags proven by those runs are flipped below, each note saying so. ' +
+                'Still unproven (runners are VMs): battery, populated GPU, thermals, the memory ' +
+                'formula against Activity Monitor\'s verdict, and what anything LOOKS like - ' +
+                'tools/finish-on-a-mac.sh on a physical Mac banks exactly that evidence, and ' +
+                '`verified` flips when it comes back clean.',
+    /* A flag here means "verified on this platform", not "the code exists" - writing the code
+       and flipping the flag are deliberately two separate acts, and the second act happened for
+       several of these on 2026-07-31 when the CI live suite went green on real Apple Silicon.
+       Each flipped entry's note names its proof. */
     caps: {
-      /* Corrected 2026-07-30 to match the CODE rather than the intent, and again 2026-07-31 the
-         OTHER way: much below is now IMPLEMENTED (per-core, committed approximation, pressure,
-         per-NIC, per-device, GPU via IOAccelerator, wake assertions, the growth walker, the whole
-         action layer - and, later the same day, the socket and startup inspectors, the clipboard
-         watcher, per-process faults, the disk read/write split and the menu-bar item) and every
-         flag for it is still false, because a flag here means "verified on this platform" and none
-         of it has executed on a Mac. The note beside each says which state it is in. The CI live
-         suite flipping green is what changes these, one by one. */
-      'cpu.perCore': false, 'cpu.temps': false,
+      /* Corrected 2026-07-30 to match the CODE rather than the intent, corrected again 2026-07-31
+         the OTHER way (everything implemented, every flag false pending hardware), and then, later
+         that same day, CI ran the whole suite on real Apple Silicon - macos-14 and macos-15, both
+         green, first try. The flags flipped below are EXACTLY the ones whose live checks are
+         unconditional: per-core counts matched os.cpus(), per-device rows named diskN arrived, the
+         top-faults join landed with real values, /api/conns saw the bridge's own listener with its
+         pid resolved to a name, /api/startup returned real agents/daemons, the walker walked a
+         real Darwin home, and a real pbcopy round-tripped the watcher. Flags whose live checks are
+         CONDITIONAL on hardware the runners lack (battery internals, IOAccelerator GPU, the block-
+         storage split) or that only prove emission-not-values (per-interface rates, pressure,
+         wake) stay put until a physical Mac's evidence arrives - tools/finish-on-a-mac.sh. */
+      'cpu.perCore': true, 'cpu.temps': false,
       'mem.hardFaults': true, 'mem.committed': false, 'mem.cache': true, 'mem.pressure': false,
-      'disk.perVolume': true, 'disk.io': 'partial', 'disk.perDevice': false,
-      'net.rates': true, 'net.perInterface': false, 'net.sockets': false,
-      'proc.list': true, 'proc.cpu': 'partial', 'proc.mem': true, 'proc.io': false, 'proc.faults': false,
+      'disk.perVolume': true, 'disk.io': 'partial', 'disk.perDevice': true,
+      'net.rates': true, 'net.perInterface': false, 'net.sockets': true,
+      'proc.list': true, 'proc.cpu': 'partial', 'proc.mem': true, 'proc.io': false, 'proc.faults': true,
       'gpu.total': false, 'gpu.perAdapter': false, 'gpu.perProcess': false,
       'power.battery': true, 'power.rate': true, 'power.health': true, 'power.wake': false,
-      'scan.mft': false, 'scan.iotrace': false, 'scan.growth': false, 'scan.startup': false,
-      'clip.history': false,
+      'scan.mft': false, 'scan.iotrace': false, 'scan.growth': true, 'scan.startup': true,
+      'clip.history': 'partial',
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
     },
     notes: {
-      'cpu.perCore': 'Implemented: os.cpus() carries per-core tick counters on Darwin, differenced ' +
-                     'between ticks like /proc/stat on Linux. Unverified on hardware - flips when ' +
-                     'CI shows per-core values agreeing with an independent source. (An earlier ' +
-                     'note here claimed per-core was impossible without a native addon, which was ' +
-                     'never true.)',
+      'cpu.perCore': 'os.cpus() per-core tick counters, differenced between ticks like /proc/stat ' +
+                     'on Linux. Verified on real Apple Silicon by the CI live suite 2026-07-31: ' +
+                     'core count matches os.cpus(), values in range and not clones of the total. ' +
+                     '(An earlier note here claimed per-core was impossible without a native ' +
+                     'addon, which was never true.)',
       'cpu.total': 'Comes from the iostat stream. If iostat is missing or has not yet emitted a ' +
                    'data line, total is null rather than 0 - an idle-looking CPU is the one lie ' +
                    'this tool must never tell.',
@@ -236,38 +239,42 @@ const PLATFORMS = {
       'proc.cpu': 'macOS `ps` reports %cpu relative to ONE core, so a saturated multi-threaded ' +
                   'process can exceed 100. Normalised by core count to match the Windows and Linux ' +
                   'scale, but this is unverified on hardware.',
-      'proc.faults': 'Implemented: `top -l 1 -stats pid,faults` polled every 15 ticks, joined onto ' +
-                     'the ps rows by pid - lifetime counts, the same quantity the Windows column ' +
-                     'shows. The parser refuses any output whose header is not exactly PID/FAULTS, ' +
-                     'so a reordered top yields null, never a misread column. Unverified on hardware.',
+      'proc.faults': '`top -l 1 -stats pid,faults` polled every 15 ticks, joined onto the ps rows ' +
+                     'by pid - lifetime counts, the same quantity the Windows column shows. The ' +
+                     'parser refuses any output whose header is not exactly PID/FAULTS, so a ' +
+                     'reordered top yields null, never a misread column. Verified 2026-07-31: the ' +
+                     'CI live run saw the join land with real values on both runners.',
       'disk.io': 'iostat gives COMBINED throughput; the read/write split is implemented one level ' +
                  'up, from IOBlockStorageDriver cumulative bytes differenced across a 5-tick poll - ' +
                  'an AVERAGE over that window, totals only, and unverified until CI\'s captured ' +
                  'ioreg output agrees. Busy percentage and queue depth remain null.',
-      'disk.perDevice': 'Implemented: per-disk MB/s and tps from the iostat columns, named from ' +
-                        'its header row. Unverified on hardware.',
+      'disk.perDevice': 'Per-disk MB/s and tps from the iostat columns, named from its header ' +
+                        'row. Verified 2026-07-31: the CI live run saw named diskN rows on both ' +
+                        'runners.',
       'net.perInterface': 'Implemented: per-NIC rates differenced from netstat -ib. Unverified on ' +
                           'hardware.',
       'cpu.temps': 'Apple Silicon exposes thermals only through IOKit and powermetrics, and ' +
                    'powermetrics requires root. Omitted rather than faked.',
       'proc.io': 'Per-process disk I/O needs fs_usage, which requires root and disabling SIP on ' +
                  'some releases. Not worth the cost.',
-      'net.sockets': 'Implemented (inspect-posix.js): netstat -anv reports the owning pid for ' +
-                     'EVERY socket unprivileged - lsof without root sees only your own - joined ' +
-                     'to names from ps. The pid column\'s position is computed from the header, ' +
-                     'not hard-coded, and an unrecognised header refuses rather than guesses. ' +
-                     'Unverified on hardware.',
-      'scan.startup': 'Implemented (inspect-posix.js): LaunchAgents and LaunchDaemons plists via ' +
-                      'plutil (excluding /System, as the Windows scan excludes \\Microsoft\\), ' +
-                      'launchctl state, and System Events login items - which need automation ' +
-                      'consent and are reported as unavailable when refused, not as an empty ' +
-                      'list. Unverified on hardware.',
-      'clip.history': 'Implemented (clipwatch-posix.js), and honestly weaker than Windows: text ' +
-                      'only, no source app (reading it would raise TCC prompts from a background ' +
-                      'process), and polling pbpaste costs a fork per poll where Windows polls a ' +
-                      'free counter - the watcher\'s header states the cost. Same jsonl, same ' +
-                      'secret heuristics, same 24 h scrub. At best \'partial\' once CI sees it ' +
-                      'log a real copy.',
+      'net.sockets': 'inspect-posix.js: netstat -anv reports the owning pid for EVERY socket ' +
+                     'unprivileged - lsof without root sees only your own - joined to names from ' +
+                     'ps. The pid column\'s position is computed from the header, not hard-coded, ' +
+                     'and an unrecognised header refuses rather than guesses. Verified 2026-07-31: ' +
+                     'live /api/conns found the bridge\'s own :8790 listener, pid resolved to a ' +
+                     'name, on both CI runners.',
+      'scan.startup': 'inspect-posix.js: LaunchAgents and LaunchDaemons plists via plutil ' +
+                      '(excluding /System, as the Windows scan excludes \\Microsoft\\), launchctl ' +
+                      'state, and System Events login items - which need automation consent and ' +
+                      'are reported as unavailable when refused, not as an empty list. Verified ' +
+                      '2026-07-31: live /api/startup returned real entries in the macOS ' +
+                      'vocabulary on both CI runners.',
+      'clip.history': 'clipwatch-posix.js, and honestly weaker than Windows - hence partial, its ' +
+                      'ceiling: text only, no source app (reading it would raise TCC prompts from ' +
+                      'a background process), and polling pbpaste costs a fork per poll where ' +
+                      'Windows polls a free counter - the watcher\'s header states the cost. Same ' +
+                      'jsonl, same secret heuristics, same 24 h scrub. Verified 2026-07-31: CI ' +
+                      'round-tripped a real pbcopy through it on both runners.',
       'host.tray': 'Implemented in the native host (NSStatusItem menu-bar item: show/hide, float ' +
                    'on top, quit-panel-not-bridge). Only exists when VitalsHost runs, and no ' +
                    'menu bar has ever drawn it - CI proves the build, human eyes prove the item.',
@@ -278,9 +285,10 @@ const PLATFORMS = {
       'power.wake': 'Implemented: pmset -g assertions names the process holding the machine ' +
                     'awake, by pid, with no admin rights - something the Windows build cannot do ' +
                     'unelevated. Unverified on hardware.',
-      'scan.growth': 'Implemented: the portable walker (growthscan.js, POST /api/growthscan) ' +
-                     'writes snapshots that /api/growth diffs. Covers what this user may read, ' +
-                     'not the whole disk. Unverified on hardware.',
+      'scan.growth': 'The portable walker (growthscan.js, POST /api/growthscan) writes snapshots ' +
+                     'that /api/growth diffs. Covers what this user may read, not the whole disk. ' +
+                     'Verified 2026-07-31: CI walked a real Darwin home - dirs, files, denials ' +
+                     'all counted - and validated the snapshot contract, on both runners.',
       'act.kill': 'Implemented: SIGTERM, then SIGKILL for survivors, permission denials counted ' +
                   'and reported. Unverified on hardware.',
       'act.clean': 'Implemented: user targets (TMPDIR, ~/Library/Caches, ~/Library/Logs) swept ' +

@@ -43,7 +43,11 @@ const FILES = [
   'lib/WebView2Loader.dll',
   // docs a new install needs
   'INSTALL.md', 'INSTALL_FOR_CLAUDE.md', 'USING.md', 'LICENSE', 'NOTICE.md',
-  // tools
+  // the macOS finishing kit: the process doc, the one-command runner, and the capture script it
+  // and CI both use. They ship with the install because the person with the Mac is a user, not
+  // necessarily a contributor with the repo.
+  'FINISH_ON_A_MAC.md',
+  'tools/finish-on-a-mac.sh',
   'tools/capture-macos-fixtures.sh',
   // the native macOS panel host - source, not a binary. It is compiled by CI (and by anyone with
   // Xcode command line tools) rather than shipped built, because an unsigned binary downloaded

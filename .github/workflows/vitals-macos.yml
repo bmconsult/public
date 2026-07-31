@@ -283,8 +283,22 @@ jobs:
           sleep 5
           if kill -0 $HOSTPID 2>/dev/null; then
             echo "host still running after 5s (did not crash on launch)"
+            # Photograph it while it is up. "What it looks like needs human eyes" conflated two
+            # things - a human must JUDGE the pixels, but capturing them is automation's job.
+            # Runners do have a window server; if this comes back wallpaper-only or refuses,
+            # that is itself a finding about capture consent on runners, banked not guessed.
+            sleep 3
+            screencapture -x host-window.png || echo "screencapture refused on this runner"
             kill $HOSTPID 2>/dev/null || true
           else
             echo "HOST EXITED EARLY - check the build step output"
             exit 1
           fi
+
+      - name: Upload the host screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-screenshot-${{ matrix.os }}
+          path: vitals/host-window.png
+          if-no-files-found: warn
