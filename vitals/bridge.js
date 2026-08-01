@@ -26,6 +26,7 @@ const { diagnoseAt } = require('./replay');
 const { Workloads } = require('./workload');
 const { Notifier } = require('./notify');
 const { correlate } = require('./correlate');
+const { Scheduler, BootTrial } = require('./schedule');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -656,7 +657,7 @@ const askPermission = () => (MODE === 'viewer'
   ? 'plan'
   : (process.env.VITALS_PERMISSION_MODE || 'acceptEdits'));
 const ask = new Ask(HIST_DIR, { cwd: HERE, port: PORT, permissionMode: askPermission, mode: () => MODE });
-let cachedMaint = null, maintAt = 0;
+let cachedMaint = null;
 
 /* ---------------- clipboard history (2026-07-30, opt-in) ----------------
  * OFF unless started, and it is not started by default anywhere. The watcher polls
@@ -1462,56 +1463,95 @@ function toggleTask(name, enable, cb) {
  * outcomes ledger records fired/cleared transitions even when no page exists to ask. Growth is
  * refreshed at most every 10 min — it is file I/O over MFT snapshots that change only when the
  * user scans, so per-call recomputation was cost with no new information. */
-let cachedGrowth = null, growthAt = 0;
+let cachedGrowth = null;
 /* B3 (2026-07-31): the disk-free trend for the predictive rule. Cached on the same 10 min clock
  * as growth and for the same reason - it is file I/O over the rollup day-files, and free space
  * does not develop a new multi-day trend between two 30 s diagnosis passes. */
-let cachedTrend = null, trendAt = 0;
-let cachedWl = [], wlAt = 0;
+let cachedTrend = null;
+let cachedWl = [];
 /* B13/B14/B15. Drive health, interrupt share and NPU on a slow clock: none of them can change
    second to second, and two of the three are process spawns. Ten minutes, like the other
    derived signals. */
-let cachedHw = null, hwAt = 0;
+let cachedHw = null;
+/* B8. Every periodic job now goes through ONE scheduler instead of an inline `Date.now() - xAt >
+   600000` check inside the diagnosis. Two things change and both matter:
+
+   - They no longer all fire on the same ten-minute boundary. The old checks were evaluated
+     together, on the same 30 s pass, with the same period - so the growth read, the trend fit, the
+     hardware one-shot and the maintenance probes stacked into one spike of work, every ten minutes,
+     forever. Stratified placement spreads them across the window with a guaranteed gap.
+   - They no longer depend on the diagnosis running. An inline check inside currentDiagnosis() only
+     fires when something asks for a diagnosis, which couples the refresh rate of every derived
+     signal to an unrelated caller. */
+const jobs = new Scheduler({ minGapMs: 4000 });
+
+jobs.every('growth', 600_000, () => {
+  const snaps = hist.snapshots();
+  cachedGrowth = snaps.length >= 2 ? hist.growth(snaps[0].file, snaps[snaps.length - 1].file) : null;
+});
+
+jobs.every('trend', 600_000, () => {
+  cachedTrend = { diskFree: hist.trend('diskFreeGB', 14) };
+});
+
+/* Windows-only, and SKIPPED rather than attempted-and-ignored. Off Windows the old code spawned a
+   process that could not exist, every ten minutes, forever, and binned the failure in a callback
+   that discarded its error. */
+if (PS_HOST) {
+  jobs.every('hardware', 600_000, () => new Promise((res) => {
+    ps(SCRIPTS.hardware, (e, d2) => { if (!e && d2) cachedHw = d2; res(); });
+  }));
+  jobs.every('maintenance', 600_000, () => new Promise((res) => {
+    ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; res(); });
+  }));
+}
+
+/* B6 verdicts. Only workloads with a LIVE session are asked: a verdict about a program that is not
+   running is a finding nobody can act on. */
+jobs.every('workload-verdicts', 120_000, () => {
+  cachedWl = work.list()
+    .filter((w) => w.live)
+    .map((w) => work.verdict(w.name))
+    .filter((v) => v && v.ok && v.call !== 'normal');
+});
+
+jobs.start(1000);
+
+/* B11. Measured once, held for the session, never written to disk. */
+const boot = new BootTrial();
+boot.run({
+  /* How expensive is a PowerShell one-shot HERE? It is the unit of cost for most of what this
+     product does on Windows, it varies by an order of magnitude between machines, and nothing was
+     measuring it - the ten-minute periods were chosen on the assumption it is cheap. */
+  psSpawn: () => new Promise((res, rej) => {
+    if (!PS_HOST) return rej(new Error('no PowerShell on this platform'));
+    const t0 = Date.now();
+    ps('1', (e) => {
+      if (e) return rej(e);
+      const ms = Date.now() - t0;
+      res({ value: ms, verdict: ms > 600 ? 'slow' : ms > 200 ? 'normal' : 'fast',
+            why: `an empty PowerShell one-shot returned in ${ms} ms` });
+    });
+  }),
+  /* Cores and memory decide how much of this machine a background job may reasonably take. */
+  capacity: async () => {
+    /* Required here rather than assumed in scope. bridge.js has `os` only inside two functions, so
+       the first version of this probe threw "os is not defined" — and the trial reported it as
+       UNMEASURED rather than inventing a pessimistic verdict, which is the behaviour the design
+       exists for and how the bug was visible at all. */
+    const os = require('os');
+    const cores = os.cpus().length, gb = os.totalmem() / 2 ** 30;
+    return { value: { cores, gb: +gb.toFixed(1) },
+             verdict: cores >= 8 && gb >= 16 ? 'roomy' : cores >= 4 ? 'modest' : 'tight',
+             why: `${cores} logical cores, ${gb.toFixed(1)} GB installed` };
+  },
+}).then(() => {
+  const r = boot.results;
+  console.error('[trial] ' + Object.entries(r)
+    .map(([k, v]) => k + '=' + (v.ok ? v.verdict : 'unmeasured')).join(' '));
+});
+
 function currentDiagnosis() {
-  if (Date.now() - growthAt > 600000) {
-    growthAt = Date.now();
-    const snaps = hist.snapshots();
-    cachedGrowth = snaps.length >= 2 ? hist.growth(snaps[0].file, snaps[snaps.length - 1].file) : null;
-  }
-  if (Date.now() - trendAt > 600000) {
-    trendAt = Date.now();
-    try { cachedTrend = { diskFree: hist.trend('diskFreeGB', 14) }; }
-    catch (e) { cachedTrend = null; console.error('[trend]', e.message); }
-  }
-  /* Maintenance signals refresh on their own slow clock (10 min). They are registry reads, a shell
-     namespace walk and a scheduled-task lookup - cheap, but none of them can change second to second,
-     so putting them on the 1 Hz tick would be cost with no information. */
-  /* Windows-only, and skipped rather than attempted-and-ignored. The callback already discarded the
-     error, so off-Windows this was spawning a process that could not exist every ten minutes forever
-     and quietly binning the failure. The diagnosis itself is pure Node and runs everywhere; only
-     these maintenance signals (pending reboot, recycle bin, defrag) are absent - and they are
-     Windows remedies, so there is nothing to port. */
-  if (PS_HOST && Date.now() - hwAt > 600_000) {
-    hwAt = Date.now();
-    ps(SCRIPTS.hardware, (e, d2) => { if (!e && d2) cachedHw = d2; });
-  }
-  if (PS_HOST && Date.now() - maintAt > 600_000) {
-    maintAt = Date.now();
-    ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; });
-  }
-  /* B6 verdicts, on the same slow clock as the other derived signals. Recomputing them per tick
-     would re-merge every past session's histograms once a second to answer a question that changes
-     over minutes. Only workloads with a live session are asked: a verdict about a program that is
-     not running is a finding nobody can act on. */
-  if (Date.now() - wlAt > 120_000) {
-    wlAt = Date.now();
-    try {
-      cachedWl = work.list()
-        .filter((w) => w.live)
-        .map((w) => work.verdict(w.name))
-        .filter((v) => v && v.ok && v.call !== 'normal');
-    } catch (e) { cachedWl = []; console.error('[workload]', e.message); }
-  }
   const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint,
                                      trend: cachedTrend, workloads: cachedWl, hw: cachedHw });
   outcomes.observe(d, latest);
@@ -1935,6 +1975,12 @@ const server = http.createServer((req, res) => {
   /* B16: every declared relationship, measured over the live ring — including the ones that did
      NOT qualify. A table of what was looked at is more useful than a filtered list of hits, and it
      is what makes the absence of a correlation legible rather than invisible. */
+  /* B8/B11: what is scheduled, when it next runs, and what the boot trial decided. Published
+     because a scheduler nobody can inspect is indistinguishable from a pile of timers. */
+  if (p === '/api/schedule') {
+    return json(res, 200, { scheduler: jobs.status(), trial: boot.status() });
+  }
+
   if (p === '/api/correlate') {
     const win = Math.max(60, Math.min(3600, +url.searchParams.get('n') || 1200));
     return json(res, 200, correlate(hist.recent(win)));

@@ -127,6 +127,10 @@ jobs:
         if: always()
         run: node test-dashboard.js
 
+      - name: Scheduling — collision-free jobs, boot trial (B8/B11)
+        if: always()
+        run: node test-schedule.js
+
       # THE EVIDENCE STEP for `self.verify` on darwin, which is flagged FALSE in collect/caps.js
       # despite the code being complete - because that file's rule is that a flag means observed
       # working, not implemented. All three comparisons are independent here (vm_stat vs
