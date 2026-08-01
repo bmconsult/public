@@ -290,10 +290,13 @@ const PLATFORMS = {
       'clip.history': 'partial',
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
-      /* All three comparisons are independent on darwin by construction. Not yet OBSERVED
-         agreeing on real hardware, and this file's rule is that a flag means verified, not
-         implemented - so it stays false until a CI run publishes the agreement record. */
-      'self.verify': false,
+      /* OBSERVED, 2026-08-01, on real Apple Silicon (macos-14 + macos-15):
+         https://github.com/bmconsult/public/actions/runs/30682901723
+         All three comparisons ran and all three agreed - memory 0 violations in 16, cpu median 8.0
+         against a 15 tolerance, uptime median 107 s against 240. Flipped only now, because this
+         file's rule is that a flag means observed rather than implemented, and until that run there
+         was code but no evidence. */
+      'self.verify': true,
     },
     notes: {
       'cpu.perCore': 'os.cpus() per-core tick counters, differenced between ticks like /proc/stat ' +
@@ -377,9 +380,6 @@ const PLATFORMS = {
                      'raises the password dialog, the user can refuse, and the elevated process ' +
                      'only ever runs clean-admin.js with a key from its own fixed table. ' +
                      'Unverified on hardware.',
-      'self.verify': 'The code paths are independent on darwin (vm_stat vs host_statistics64, ' +
-        'iostat vs host_processor_info) but no agreement record has been captured on real ' +
-        'hardware yet. Flagged false until CI publishes one.',
       'host.frameless': 'Opens in the default browser in app mode. A native WKWebView host is ' +
                         'possible but is a separate build with its own signing requirements.',
     },
