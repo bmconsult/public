@@ -2301,6 +2301,9 @@ const A0R=-Math.PI*0.75, SPANR=Math.PI*1.5;
 function sparkline(cvs,data,color,stroke){
   const cx=cvs.getContext('2d'), r=cvs.getBoundingClientRect(), dpr=Math.min(devicePixelRatio||1,2);
   if(!r.width||!r.height) return;
+  /* A3. Budget from the actual drawn width: there is no point emitting more segments than the
+     strip has pixels, and the decimator keeps every turn and every peak. */
+  data = decimate(data, Math.round(r.width * (flag('spark', true) ? 1 : 1e6)));
   cvs.width=r.width*dpr; cvs.height=r.height*dpr; cx.setTransform(dpr,0,0,dpr,0,0);
   cx.clearRect(0,0,r.width,r.height);
   if(data.length<2) return;
@@ -3151,7 +3154,7 @@ RENDER.therm=()=>{
       const ks=Object.keys(a.eng||{}).sort((x,y)=>(a.eng[y]||0)-(a.eng[x]||0)).slice(0,4);
       if(!ks.length) return `<div class="geng"><span class="gel">ALL ENGINES</span><div class="geb"><i style="width:0"></i></div><span class="gev">idle</span></div>`;
       return ks.map(k=>`<div class="geng"><span class="gel">${ENG_LABEL[k]||k.toUpperCase()}</span>
-        <div class="geb"><i style="width:${Math.min(100,a.eng[k])}%"></i></div>
+        <div class="geb"><i style="width:${pctSoft(a.eng[k])}%"></i></div>
         <span class="gev">${fmt(a.eng[k],1)}%</span></div>`).join('');
     };
     $('#gAds').innerHTML=(gg.ads||[]).map(a=>`<div class="gadp">
@@ -3184,7 +3187,7 @@ RENDER.therm=()=>{
     $('#thClk').textContent=clkMax?fmt(clkMax/1000,2):'—';
     $('#thCores').innerHTML=cores.map(c=>{const v=num(c.value);
       return `<div class="thcore"><span class="gel">${c.text.replace('CPU ','')}</span>
-        <div class="geb"><i style="width:${Math.min(100,v)}%;${v>85?'background:var(--crit)':v>75?'background:var(--warn)':''}"></i></div>
+        <div class="geb"><i style="width:${pctSoft(v)}%;${v>85?'background:var(--crit)':v>75?'background:var(--warn)':''}"></i></div>
         <span class="gev">${fmt(v,0)}°C</span></div>`;}).join('');
     // fans: an absent sensor and a stopped fan are different facts — say which this is
     $('#thFan').innerHTML=s.fans&&s.fans.length
@@ -5447,6 +5450,123 @@ function paintSelf(t){
 
 
 
+
+
+/* ================= A4 · A3 · A11: render quality =================
+ * Three things that are invisible when they work and obvious the moment they do not.
+ */
+
+/* ---- A4: SOFT-SATURATION SHOULDER -----------------------------------------------------------
+ * `Math.min(x, max)` draws a CONTOUR: every value at or past the limit lands on exactly the same
+ * pixel, so 100 and 140 of a soft limit are indistinguishable and a run of saturated samples
+ * renders as a dead flat line with a corner where it clipped. The eye reads that corner as a
+ * rendering fault, which is the worst outcome - the reader stops trusting the instrument.
+ *
+ * THE SHOULDER IS IDENTITY UP TO THE CEILING, and this is the whole of its honesty. The first cut
+ * put the knee at 86% of the range, which made a true 100% render at 93 - it dressed the rare
+ * overshoot at the cost of misreporting the common case, which is precisely backwards. A bounded
+ * percentage now passes through completely untouched; only genuine overshoot is compressed, and it
+ * stays strictly increasing so the difference survives wherever there is room to draw it. */
+function shoulder(v, max) {
+  const M = max == null ? 100 : max;
+  if (!(v > M)) return Math.max(0, v);       // IDENTITY up to the ceiling — see above
+  /* Above the ceiling: a rational roll-off that is continuous in value and slope at v = M and
+     asymptotes to M * OVER. Strictly increasing, so 100 and 140 stay distinguishable wherever
+     there is room to draw the difference. */
+  const OVER = 1.18;
+  const head = M * (OVER - 1);
+  const t = (v - M) / M;
+  return M + head * (t / (t + 1));
+}
+/** Percentage of a bar's width. Bounded metrics are untouched; only overshoot is compressed. */
+function pctSoft(v, max) {
+  const M = max == null ? 100 : max;
+  return Math.max(0, Math.min(100, (shoulder(v, M) / (M * 1.18)) * 100 * 1.18 > 100
+    ? 100 : (shoulder(v, M) / M) * 100));
+}
+
+/* ---- A3: ANGULAR DECIMATION ------------------------------------------------------------------
+ * A sparkline over 3600 points draws 3600 line segments into a strip a few hundred pixels wide.
+ * Most of them are sub-pixel and invisible, and the cost is real.
+ *
+ * Gated on the ADJACENT-SAMPLE DELTA, never on a global variance: a global measure would decimate
+ * hardest exactly where a series is mostly flat with rare spikes - which is the shape that matters
+ * most here and the one where dropping points loses the only interesting samples. Locally smooth
+ * runs collapse; anything that turns is kept.
+ *
+ * PEAKS ARE NEVER DROPPED. A decimator that can lose a spike is worse than no decimator, because
+ * the whole reason to look at one of these strips is to find the spike. */
+function decimate(data, budget) {
+  const N = data.length;
+  const cap = Math.max(24, budget | 0 || 240);
+  if (N <= cap) return data;
+  const span = Math.max(...data) - Math.min(...data);
+  if (!(span > 0)) return [data[0], data[N - 1]];      // genuinely flat: two points describe it
+  /* A turn worth keeping is one the eye could resolve: about half a pixel of vertical movement at
+     the width this will be drawn at. Derived from the budget rather than chosen. */
+  const eps = span / cap;
+  const out = [data[0]];
+  let run = 0;
+  for (let i = 1; i < N - 1; i++) {
+    const d = Math.abs(data[i] - data[i - 1]);
+    const isPeak = (data[i] >= data[i - 1] && data[i] >= data[i + 1])
+                || (data[i] <= data[i - 1] && data[i] <= data[i + 1]);
+    run++;
+    /* Kept if it turned, if it moved visibly, or if too much has been dropped in a row - the last
+       clause bounds the worst-case distortion of a long smooth ramp. */
+    if (d >= eps || (isPeak && d > 0) || run >= 8) { out.push(data[i]); run = 0; }
+  }
+  out.push(data[N - 1]);
+  return out;
+}
+
+/* ---- A11: THE BACKDROP-FILTER PROVER ---------------------------------------------------------
+ * VITALS *is* a translucent glass panel, so `backdrop-filter` failing is not cosmetic - it is the
+ * product looking broken. And it fails for a reason that is invisible in the CSS of the element
+ * itself: ANY ancestor with a filter, transform, will-change, contain or opacity < 1 creates a
+ * containing block that severs the backdrop, and the rule simply does nothing. No warning, no
+ * console message, no computed-style difference on the element you are inspecting.
+ *
+ * So the prover walks up from the element and NAMES THE ANCESTOR responsible, because "blur is not
+ * working" is unactionable and "the blur is severed by .fx-wrap, which sets will-change:transform"
+ * is a fix. It ships inside the panel rather than living in a notes file, because the machine it
+ * needs to run on is the user's. */
+function proveBackdrop(sel) {
+  const el = typeof sel === 'string' ? $(sel) : sel;
+  if (!el) return { ok: false, why: 'no such element' };
+  const cs = getComputedStyle(el);
+  const asked = (cs.backdropFilter && cs.backdropFilter !== 'none')
+             || (cs.webkitBackdropFilter && cs.webkitBackdropFilter !== 'none');
+  if (!asked) return { ok: false, asked: false, why: 'this element does not ask for a backdrop-filter' };
+  if (!(CSS && CSS.supports && (CSS.supports('backdrop-filter', 'blur(1px)')
+                             || CSS.supports('-webkit-backdrop-filter', 'blur(1px)')))) {
+    return { ok: false, asked: true, why: 'this engine does not support backdrop-filter at all' };
+  }
+  const blockers = [];
+  for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+    const c = getComputedStyle(a);
+    const bad = [];
+    if (c.filter && c.filter !== 'none') bad.push('filter: ' + c.filter);
+    if (c.transform && c.transform !== 'none') bad.push('transform: ' + c.transform);
+    if (c.perspective && c.perspective !== 'none') bad.push('perspective: ' + c.perspective);
+    if (c.willChange && /transform|filter|opacity/.test(c.willChange)) bad.push('will-change: ' + c.willChange);
+    if (c.contain && /paint|layout|strict|content/.test(c.contain)) bad.push('contain: ' + c.contain);
+    if (c.opacity && +c.opacity < 1) bad.push('opacity: ' + c.opacity);
+    if (bad.length) {
+      const id = a.id ? '#' + a.id : '';
+      const cl = a.className && typeof a.className === 'string' ? '.' + a.className.trim().split(/\s+/).join('.') : '';
+      blockers.push({ selector: (a.tagName.toLowerCase() + id + cl).slice(0, 90), reasons: bad });
+    }
+  }
+  return blockers.length
+    ? { ok: false, asked: true, blockers,
+        why: `the backdrop is severed by ${blockers.length} ancestor${blockers.length === 1 ? '' : 's'} — `
+           + `the nearest is ${blockers[0].selector} (${blockers[0].reasons[0]})` }
+    : { ok: true, asked: true, blockers: [], why: 'no ancestor severs the backdrop; the blur is live' };
+}
+/* Defaults to the element that actually carries the panel's glass, so the prover is one call with
+   no argument on the machine where it matters. */
+window.__vitalsProveBackdrop = (sel) => proveBackdrop(sel || '#shell');
 
 /* ================= A9 · A10 · A6 =================
  * Three small pieces of instrument hygiene that mostly pay off in other people's hands.
