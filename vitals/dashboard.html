@@ -644,7 +644,11 @@ tr:hover td{background:rgba(var(--fg),.025);color:var(--ink)}
    across the canvas, an imperative, a quiet rail. No boxes; light and type do all the zoning. The
    verdict and its top finding are ONE object (they were the same sentence printed twice).
    (#verdict/.find survive elsewhere for the startup suspicious card and the disk SSD warning.) */
-.dgx{position:relative;min-height:100%;padding:6px 8px 0 14px;--vc:var(--ok);
+/* height, NOT min-height. With min-height:100% the block could grow past the page and take the
+   WHOLE PAGE scrolling with it — findings are added by the engine, so its height is not something
+   the layout gets to assume. Bounded here, and the one region that genuinely varies is given the
+   scroll instead. */
+.dgx{position:relative;height:100%;min-height:0;padding:6px 8px 0 14px;--vc:var(--ok);
   display:flex;flex-direction:column}   /* foot pins to the bottom: the void is framed, not leftover */
 .dgx.crit{--vc:var(--crit);background:
   radial-gradient(760px 420px at 6% 16%,rgba(var(--crit-r),.16),transparent 70%),
@@ -657,8 +661,13 @@ tr:hover td{background:rgba(var(--fg),.025);color:var(--ink)}
 .dgx-meta{display:flex;align-items:center;gap:12px;font-size:9.5px;letter-spacing:.2em;
   text-transform:uppercase;color:var(--ink-3);font-weight:600}
 .dgx-meta .pill{letter-spacing:.04em}
-.dgx-main{display:flex;gap:44px;align-items:flex-start;margin-top:26px}
-.dgx-hero{flex:1;min-width:0}
+.dgx-main{display:flex;gap:44px;align-items:stretch;margin-top:26px;flex:1 1 auto;min-height:0}
+/* Both columns are bounded so neither can push the page. In practice the hero fits and only the
+   rail scrolls, which is the intent: the headline finding should never slide out from under you
+   while you read the list beside it. */
+.dgx-hero{flex:1;min-width:0;min-height:0;overflow-y:auto;
+  scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+.dgx-hero::-webkit-scrollbar{width:0;height:0}
 .dgx-say{font-family:var(--disp);font-size:41px;font-weight:200;line-height:1.16;
   letter-spacing:-.025em;color:var(--ink);max-width:800px;text-wrap:balance}
 .dgx-why{font-size:12.5px;color:var(--ink-2);line-height:1.7;max-width:660px;margin-top:20px}
@@ -699,7 +708,12 @@ tr:hover td{background:rgba(var(--fg),.025);color:var(--ink)}
   letter-spacing:.18em;text-transform:uppercase;margin-right:9px}
 .dgx-do .confd{margin-left:14px;vertical-align:1px}
 /* the rail: everything else wrong, quiet, right-hand side */
-.dgx-rail{width:298px;flex:none;border-left:1px solid var(--line-2);padding:2px 0 2px 24px}
+/* THE ONE REGION THAT SCROLLS. The rail holds every finding after the headline, so its length is
+   the machine's business rather than the layout's. No visible bar — the project has none anywhere,
+   so full and empty keep identical geometry. */
+.dgx-rail{width:298px;flex:none;border-left:1px solid var(--line-2);padding:2px 0 2px 24px;
+  min-height:0;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+.dgx-rail::-webkit-scrollbar{width:0;height:0}
 .dgx-rail .rl{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);
   font-weight:700;margin-bottom:14px}
 .drf{position:relative;padding:0 0 0 14px;margin-bottom:18px;--sv:var(--net)}
@@ -1211,7 +1225,12 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    list beside it sorts by absolute GB, so a 0.4 GB folder that doubled overnight sits at the bottom
    under a 20 GB folder that grew 2 GB. In here the small fast one GLOWS and the large slow one does
    not, because colour is carrying a statistic that area cannot. */
-.gtm{position:relative;width:100%;height:270px;border-radius:10px;overflow:hidden;
+/* HEIGHT SCALES WITH THE WINDOW, rather than stepping at one breakpoint. A fixed 270px plus a
+   single `max-height:760px` rule leaves a band of window sizes just above the breakpoint where the
+   treemap is still full height and the page no longer fits — which is exactly the "scrolls by a few
+   pixels" state. clamp() removes the cliff: it can never be taller than a quarter of the viewport,
+   so the page fits at every height instead of at two of them. */
+.gtm{position:relative;width:100%;height:clamp(120px,25vh,270px);border-radius:10px;overflow:hidden;
   border:1px solid var(--line-2);background:var(--gl-1)}
 .gtm canvas{display:block;width:100%;height:100%}
 .gtm-tip{position:absolute;pointer-events:none;padding:5px 9px;border-radius:7px;font-size:11px;
@@ -1221,7 +1240,9 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
   letter-spacing:.05em;flex-wrap:wrap}
 .gtm-key i{display:inline-block;width:34px;height:7px;border-radius:3px;
   background:linear-gradient(90deg,var(--ok),var(--ink-3),var(--warn),var(--crit))}
-@media (max-height:760px){ .gtm{height:190px} }
+/* The clamp above handles every height; this only tightens the floor on a genuinely short window,
+   where the list below is the more useful of the two. */
+@media (max-height:700px){ .gtm{height:clamp(110px,20vh,170px)} }
 
 /* ---------- B1: REWIND ----------
    A whole quarter of history on one screen, because the axis is logarithmic in AGE rather than
@@ -1295,11 +1316,24 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    and the hero becomes one wheel-scroll region - the same pattern the rest of the app uses, and
    the reason each child gets overflow:visible here rather than keeping its own scroller: nested
    scrollers on one axis are how a wheel event ends up moving the wrong thing. */
-@media (max-height:760px){
+/* 860, not 760. The breakpoint belongs where the content actually stops fitting, not at a round
+   number: measured, the agreement cards need ~199px and the hero only has room to pin everything
+   at about 860px of viewport. Between 760 and 860 the old rule left the cards in a clipped ~120px
+   sliver — no longer overlapping, but requiring an inner scroll to read three cards, which is the
+   same "truncation wearing a bounded region's clothes" this page was fixed for once already. */
+@media (max-height:860px){
   .sfx-hero{overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
   .sfx-hero::-webkit-scrollbar{width:0;height:0}
   #sfAnat{overflow:visible;min-height:auto}
   .sfx-chk-g{overflow:visible}
+  /* flex:none IS THE FIX, and its absence was a 128px collision.
+     This block hands the children `overflow:visible` so the hero can scroll as one. But .sfx-chk
+     kept `flex:0 1 auto; min-height:0`, so flex was still free to SHRINK it — measured at a 740px
+     viewport it was squeezed to 52px while holding 199px of now-visible content, and the agreement
+     cards painted straight over the sparkline row beneath them.
+     This is the codebase's own O1 law (`min-height:0` + `overflow:visible` = collision), walked
+     into again. Anything given visible overflow must also be told it may not shrink. */
+  .sfx-chk{flex:none;min-height:auto}
   .sfx-sprow{margin-top:18px}
 }
 .sfx-sprow canvas{flex:1;min-width:0;height:46px}
