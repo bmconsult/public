@@ -2490,7 +2490,7 @@ function go(v){
   $$('.page').forEach(p=>p.classList.toggle('on',p.id==='p-'+v));
   if(RENDER[v]) RENDER[v]();
 }
-$$('.rb[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
+$$('.rb[data-go]').forEach(b=>b.onclick=()=>{ go(b.dataset.go); try{ watchBeacon(true); }catch{} });
 
 /* DEEP LINK. `?page=footprint` (or `#footprint`) opens straight onto a page instead of OVERVIEW.
    Two uses: a second window can be pinned to one page beside the first, and a capture or a bug
@@ -5442,6 +5442,123 @@ function paintSelf(t){
 }
 
 
+
+
+/* ================= A9 · A10 · A6 =================
+ * Three small pieces of instrument hygiene that mostly pay off in other people's hands.
+ */
+
+/* ---- A10: PERMANENT ?flag= TOGGLES ----------------------------------------------------------
+ * Every optimisation from here on gets a flag, from the first one, and the flags live in the URL
+ * so a comparison is a reload rather than an edit-rebuild-remember cycle. The measured noise floor
+ * on this machine is about ±1% CPU, which is the same order as most single optimisations - so
+ * "it felt faster" is not evidence, and A/B on demand is the only way to tell.
+ *
+ * They are read once, at boot, into a frozen object. A flag that could change mid-session would
+ * make the two halves of a measurement incomparable, which is the one thing this must not do. */
+const FLAGS = (() => {
+  const out = {};
+  try {
+    const u = new URLSearchParams(location.search);
+    for (const [k, v] of u) if (k.startsWith('f.')) out[k.slice(2)] = v === '' ? true : (v === '0' ? false : v);
+  } catch {}
+  return Object.freeze(out);
+})();
+/** `flag('rings', true)` — the default is stated at the call site, so reading the code tells you
+    what ships rather than what is possible. */
+function flag(name, dflt) { return Object.prototype.hasOwnProperty.call(FLAGS, name) ? FLAGS[name] : dflt; }
+
+/* ---- A9: __vitalsPump(n) --------------------------------------------------------------------
+ * Advance the animation N steps SYNCHRONOUSLY. The only way to screenshot or test a live surface
+ * deterministically: without it a capture races the render loop and "the chart is wrong" and "the
+ * capture was early" are indistinguishable - a confusion that cost real time on this project more
+ * than once.
+ *
+ * It drives the same paths a real frame does rather than a parallel test-only route, because a
+ * pump that exercises different code proves nothing about the code that ships. */
+window.__vitalsPump = function (steps) {
+  const N = Math.max(1, Math.min(600, steps | 0 || 1));
+  let ran = 0, failed = 0;
+  for (let i = 0; i < N; i++) {
+    const t = S.tick;
+    try { if (t) { if (RENDER[S.view]) RENDER[S.view](); ran++; } } catch { failed++; }
+  }
+  /* Returns what it actually did. A pump that silently no-ops when there is no tick yet would let
+     a harness photograph an empty page and call it a pass - the same "could not draw" and
+     "finished drawing" collapse this codebase has been bitten by before. */
+  return { requested: N, painted: ran, failed, hadTick: !!S.tick, view: S.view };
+};
+
+/* ---- A6: PERSISTENCE AUDIT ------------------------------------------------------------------
+ * The rule: PERSIST INTENT, NEVER LEARNED STATE.
+ *
+ * Intent is what the user chose - theme, dial positions, which watches they set. Restoring it is
+ * correct and it is what makes an app feel like theirs. Learned state is what the machine worked
+ * out - baselines, capabilities, "we decided this host cannot do X". Restoring THAT means a
+ * conclusion drawn on one machine, or before a driver was installed, or during a bad boot, silently
+ * outlives the evidence for it. A persisted cache is a permanent blind spot over your own
+ * cold-start path, and now that VITALS ships to machines nobody here has seen, first-run is a real
+ * path rather than a hypothetical.
+ *
+ * This audits what is actually in localStorage against that rule and reports anything that looks
+ * like a cached conclusion, so the check runs on the user's machine rather than in someone's head. */
+const PERSIST_INTENT = {
+  'vitals-theme': 'which theme you chose',
+  'vitals-fx': 'effect dial positions you set',
+  'vitals-fps-field': 'the frame-rate cap you chose for the field',
+  'vitals-fps-rings': 'the frame-rate cap you chose for the rings',
+  'vitals-shell-blur': 'whether you asked for shell blur',
+  'vitals-alerts': 'the alert thresholds you set',
+  'vitals-watches': 'the watches you created',
+  'vitals-netrecs': 'network records you chose to keep',
+};
+function persistAudit() {
+  const rows = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('vitals-')) continue;
+      let bytes = 0;
+      try { bytes = (localStorage.getItem(k) || '').length; } catch {}
+      rows.push({
+        key: k, bytes,
+        classified: PERSIST_INTENT[k] ? 'intent' : 'UNCLASSIFIED',
+        what: PERSIST_INTENT[k] || 'not on the intent list — if this is a conclusion the machine '
+          + 'reached rather than a choice you made, it should not survive a restart',
+      });
+    }
+  } catch {}
+  rows.sort((a, b) => (a.classified === b.classified ? b.bytes - a.bytes : a.classified === 'UNCLASSIFIED' ? -1 : 1));
+  return { rows, clean: rows.every((r) => r.classified === 'intent'), count: rows.length };
+}
+window.__vitalsPersistAudit = persistAudit;
+
+/* ================= B4: the "I am already looking" beacon =================
+ * The bridge decides whether anything has earned a notification. This tells it one thing it cannot
+ * know on its own: that a human is looking at the diagnosis RIGHT NOW, so interrupting them would
+ * be announcing what is already on their screen.
+ *
+ * It is used ONLY to suppress. A beacon that fails, a panel that is closed, a browser that throttles
+ * background timers - every failure mode makes alerting MORE talkative, never less. That is the
+ * correct direction for a signal you cannot rely on: the cost of a redundant notification is mild
+ * annoyance, and the cost of a missed one is the thing the feature exists to prevent. */
+let WATCH_LAST = 0;
+function watchBeacon(force){
+  const now = Date.now();
+  if (!force && now - WATCH_LAST < 8000) return;
+  WATCH_LAST = now;
+  const looking = document.hasFocus() && !document.hidden;
+  try {
+    fetch(API('/api/watching?view=' + encodeURIComponent(S.view || '')
+              + '&focus=' + (looking ? '1' : '0')), { method: 'GET', keepalive: true })
+      .catch(function(){});
+  } catch {}
+}
+addEventListener('focus',  function(){ watchBeacon(true); });
+addEventListener('blur',   function(){ watchBeacon(true); });
+addEventListener('visibilitychange', function(){ watchBeacon(true); });
+setInterval(function(){ watchBeacon(false); }, 8000);
+
 /* ================= B5 + B6: WORKLOADS =================
  * B5 - what each program costs, as percentiles. A mean hides the complaint: a build averaging 40%
  * with a p95 of 45% and one averaging 40% with a p95 of 98% are different experiences, and only the
@@ -5920,6 +6037,10 @@ RENDER.self=()=>{
           <div class="sfl"><b>Reload reclaims long sessions</b><span>After 5 days up, the gpu process had accreted +4.7% cpu / +126 MB. One reload returned it. Chromium accretes; the record lives in the bridge, so a reload loses nothing.</span></div>
           <div class="sfl"><b>The rings stopped drifting</b><span>The pre-rendered history layer was being SCALED to the current box, so a dock→restore painted the old geometry stretched over the new one — tracks and readouts floating off their arcs. It now carries the geometry it was baked for and is re-made on any change, never scaled.</span></div>
           </div>
+          <div class="rl">what survives a restart<span id="sfPsVerdict" style="float:right;letter-spacing:.06em;font-weight:400;text-transform:none;opacity:.8"></span></div>
+          <div class="sfx-scr" id="sfPersist"></div>
+          <div class="rl">alerts · what will interrupt you<span id="sfAlHow" style="float:right;letter-spacing:.06em;font-weight:400;text-transform:none;opacity:.8"></span></div>
+          <div class="sfx-scr" id="sfAlerts"></div>
           <div class="rl">levers · trade stated</div>
           <div class="sfx-scr">
           <div class="sfl"><b>Dock it</b><span>Sidebar ≈2.4%, topbar ≈2.2% measured — full telemetry keeps flowing while docked.</span></div>
@@ -5931,7 +6052,7 @@ RENDER.self=()=>{
       <div class="sfx-foot"><b>Method.</b> The WebView2 tree is walked from its vitals-webview root (child processes carry no marker of their own); the bridge is identified as the collector's parent pid — its command line says nothing. Same counters as every other page: Working Set — Private, Task Manager's cpu formula, % of all logical threads. <b>Metering adds zero extra counter reads</b> — it rides the per-process read each tick already performs; only the pid map refreshes, every 30 s. Episodic one-shots (reclaim sizing, io traces, MFT scans) are excluded: they run when you ask, then end. <b>These numbers include the cost of producing this page.</b></div>
     </div>`;
   }
-  paintCaps(); paintMode(); paintSelfCheck();
+  paintCaps(); paintMode(); paintSelfCheck(); paintAlerts(); paintPersist();
   if(S.tick) paintSelf(S.tick);
 };
 
@@ -6088,6 +6209,76 @@ async function paintSelfCheck(){
       `<span class="sfc-m">${sysEsc(sc.method)}${sc.measured?`<br>measured: ${sysEsc(sc.measured)}`:''}</span></div>`;
   }).join('');
   box.innerHTML = cards || `<div class="sfc"><span class="sfc-m">nothing on this platform has an independent second source.</span></div>`;
+}
+
+
+/* B4 on the page: what the machine will interrupt you for, whether it CAN, and a way to find out
+   before the incident rather than during it. The rules are printed rather than described, because
+   "we will alert you appropriately" is not a claim anyone can check. */
+async function paintAlerts(){
+  const box=$('#sfAlerts'); if(!box) return;
+  let d; try{ d=await (await fetch(API('/api/alerts'))).json(); }catch{ return; }
+  const how=$('#sfAlHow');
+  if(how) how.textContent = d.capable===false ? 'this host cannot notify'
+                          : d.capable ? (d.how||'') : 'checking…';
+
+  const r=d.rules||{};
+  const last = d.lastAnyAt ? new Date(d.lastAnyAt).toLocaleString() : 'never';
+  /* The suppression log is shown, not just the sends. "Nothing was sent" and "something was
+     withheld, and here is why" are different states, and only the second one is reassuring. */
+  const recent=(d.recent||[]).slice(-6).reverse().map(function(x){
+    const when=new Date(x.at).toLocaleTimeString();
+    return '<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">'+sysEsc(x.what)+'</b>'
+      +'<span>'+when+' · '+sysEsc(x.id)+(x.detail?' — '+sysEsc(x.detail):'')+'</span></div>';
+  }).join('');
+
+  box.innerHTML =
+    (d.capable===false
+      ? '<div class="sfl"><b style="color:rgb(var(--t3))">Cannot reach you</b><span>This host exposes no way to raise a desktop notification, so alerts stay on this page. Everything else still works — the record is kept either way.</span></div>'
+      : '<div class="sfl"><b>'+(d.enabled?'On':'Off')+'</b><span>'
+        /* NOT <b>: `.sfl b` is display:block in this rail, so an inline bold became a block element and
+           orphaned the following full stop onto its own line. Emphasis inside a span has to use a span. */
+        +'Critical findings only, and only after one has <span style="color:var(--ink-2);font-weight:600">held for '+(r.sustainSec||90)+' s</span>. '
+        +'At most one alert per finding every '+(r.cooldownHours||6)+' h, and never two within '+(r.minGapMin||15)+' min of each other. '
+        +'Nothing is sent while you are looking at the diagnosis.</span></div>')
+    +'<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">Last alert</b><span>'+sysEsc(last)+'</span></div>'
+    +(recent||'<div class="sfl"><span class="muted2">nothing sent or withheld yet.</span></div>')
+    +'<div class="sfl"><button id="sfAlTest" style="font:inherit;font-size:11px;color:var(--ink-2);cursor:pointer;background:var(--gl-1);border:1px solid var(--line-2);border-radius:999px;padding:4px 12px">Send a test notification</button>'
+    +'<button id="sfAlTog" style="font:inherit;font-size:11px;margin-left:7px;color:var(--ink-3);cursor:pointer;background:none;border:1px solid var(--line-2);border-radius:999px;padding:4px 12px">'+(d.enabled?'Turn off':'Turn on')+'</button></div>';
+
+  const t=$('#sfAlTest');
+  if(t) t.onclick=async()=>{
+    t.disabled=true; t.textContent='sending…';
+    try{
+      const r2=await (await fetch(API('/api/alerts/test'))).json();
+      /* Reports what actually happened. "Sent" when the host accepted it and an honest failure
+         otherwise — a test button that always says "sent" tests nothing. */
+      t.textContent = r2.ok ? 'sent — check your notifications' : 'the host refused it';
+    }catch{ t.textContent='could not reach the bridge'; }
+    setTimeout(()=>{ t.disabled=false; t.textContent='Send a test notification'; }, 4000);
+  };
+  const g=$('#sfAlTog');
+  if(g) g.onclick=async()=>{
+    try{ await fetch(API('/api/alerts?on='+(d.enabled?'0':'1')),{method:'POST'}); }catch{}
+    paintAlerts();
+  };
+}
+
+/* A6 on the page. Intent is listed because a user is entitled to know what the app remembers about
+   them; anything UNCLASSIFIED is listed first and loudly, because that is the failure this audit
+   exists to catch - a conclusion the machine reached, quietly outliving its evidence. */
+function paintPersist(){
+  const box=$('#sfPersist'); if(!box) return;
+  const a=persistAudit();
+  const v=$('#sfPsVerdict');
+  if(v) v.textContent = a.clean ? 'intent only — nothing learned' : a.rows.filter(r=>r.classified!=='intent').length+' unclassified';
+  box.innerHTML = a.rows.length
+    ? a.rows.map(function(r){
+        const bad = r.classified!=='intent';
+        return '<div class="sfl"><b'+(bad?' style="color:rgb(var(--t3))"':'')+'>'+sysEsc(r.key)
+          +(bad?' · unclassified':'')+'</b><span>'+sysEsc(r.what)+' · '+r.bytes+' bytes</span></div>';
+      }).join('')
+    : '<div class="sfl"><span class="muted2">nothing is persisted yet.</span></div>';
 }
 
 function paintCaps(){

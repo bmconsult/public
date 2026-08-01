@@ -24,6 +24,7 @@ const { History, readJsonFile } = require('./history');
 const { diagnose } = require('./diagnose');
 const { diagnoseAt } = require('./replay');
 const { Workloads } = require('./workload');
+const { Notifier } = require('./notify');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -40,6 +41,7 @@ const hist = new History(HIST_DIR);
    `tick.proc` is a top-16, so a program going quiet drops off it and absence is not an exit. */
 const work = new Workloads(HIST_DIR);
 work.prune();
+
 /* Close the open sessions on the way out, so the run in progress is not lost. Without this, a
    machine that is only ever shut down normally would accumulate a baseline of nothing. */
 for (const sig of ['SIGINT', 'SIGTERM']) {
@@ -66,6 +68,23 @@ const { PS, PS_ARGS } = require('./pshost');
  * WSL through Windows interop. The one Linux available was the one Linux where every PowerShell
  * dependency is invisible. A passing suite there proves nothing about a real Linux desktop. */
 const PS_HOST = process.platform === 'win32';
+
+/* B4: proactive alerting. Constructed HERE rather than beside the other stores, because it
+   reads PS_HOST and `const` bindings are in the temporal dead zone until their declaration
+   executes - placing it earlier threw "Cannot access 'PS_HOST' before initialization" and
+   took the whole bridge down at require time. Server-side, because the entire point is the moments when no window is
+   open to journal them. Capability is PROBED rather than assumed - a Linux box without libnotify
+   and a Windows install with notifications disabled by policy are both "supported platforms" that
+   cannot deliver, and the panel reports which. */
+const notifier = new Notifier({ psHost: PS_HOST });
+notifier.probe().then((ok) => {
+  console.error('[notify] ' + (ok ? 'can raise notifications via ' + notifier.how
+                                  : 'this host cannot raise notifications; alerts stay on the page'));
+});
+/* Set by the panel's beacon: someone is looking at the diagnosis RIGHT NOW, so telling them again
+   would be telling them what is already on their screen. Stale after 15 s on purpose - a closed
+   panel stops beaconing and cannot leave the bridge permanently muted. */
+let watchingAt = 0, watchingView = null;
 /* The native action layer for the other two platforms: kill / clean / restart-an-app in Node and
    osascript, same route contracts as the PowerShell one-shots. Loaded only off Windows - on
    Windows the PowerShell paths below remain the reference implementation, untouched. */
@@ -1094,6 +1113,9 @@ const TARGETS = [
 ];
 
 const SCRIPTS = {
+  /* B13/B14/B15, as a file rather than an inline string: it is long, it has real comments about
+     what each section may and may not claim, and those comments are the load-bearing part. */
+  hardware: `& '${HERE.replace(/'/g, "''")}\\hardware.ps1'`,
   // NOTE the deliberate absence of a Test-Path guard. pagefile.sys and hiberfil.sys are ACL'd to
   // SYSTEM, so BOTH Test-Path and Get-Item fail on them (verified: Test-Path returns False on a
   // 6.28 GB hiberfil.sys) — they need permission on the file itself. Enumerating the PARENT
@@ -1445,6 +1467,10 @@ let cachedGrowth = null, growthAt = 0;
  * does not develop a new multi-day trend between two 30 s diagnosis passes. */
 let cachedTrend = null, trendAt = 0;
 let cachedWl = [], wlAt = 0;
+/* B13/B14/B15. Drive health, interrupt share and NPU on a slow clock: none of them can change
+   second to second, and two of the three are process spawns. Ten minutes, like the other
+   derived signals. */
+let cachedHw = null, hwAt = 0;
 function currentDiagnosis() {
   if (Date.now() - growthAt > 600000) {
     growthAt = Date.now();
@@ -1464,6 +1490,10 @@ function currentDiagnosis() {
      and quietly binning the failure. The diagnosis itself is pure Node and runs everywhere; only
      these maintenance signals (pending reboot, recycle bin, defrag) are absent - and they are
      Windows remedies, so there is nothing to port. */
+  if (PS_HOST && Date.now() - hwAt > 600_000) {
+    hwAt = Date.now();
+    ps(SCRIPTS.hardware, (e, d2) => { if (!e && d2) cachedHw = d2; });
+  }
   if (PS_HOST && Date.now() - maintAt > 600_000) {
     maintAt = Date.now();
     ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; });
@@ -1482,8 +1512,13 @@ function currentDiagnosis() {
     } catch (e) { cachedWl = []; console.error('[workload]', e.message); }
   }
   const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint,
-                                     trend: cachedTrend, workloads: cachedWl });
+                                     trend: cachedTrend, workloads: cachedWl, hw: cachedHw });
   outcomes.observe(d, latest);
+  /* Offered to the notifier on the same 30 s clock the diagnosis already runs on. It decides
+     whether anything has earned an interruption; nothing about that decision lives here, so the
+     rules stay in one readable place. */
+  const watching = (Date.now() - watchingAt < 15_000) && (watchingView === 'diag' || watchingView === 'ov');
+  notifier.consider(d, { watching }).catch((e) => console.error('[notify]', e.message));
   return d;
 }
 setInterval(currentDiagnosis, 30000);
@@ -1883,6 +1918,43 @@ const server = http.createServer((req, res) => {
     });
   }
   if (p === '/api/growthscan') return json(res, 200, growthScanState);
+
+  /* B4. The panel says what it is showing and whether it has focus; the bridge uses it only to
+     SUPPRESS. A beacon that fails, or a panel that is closed, therefore makes alerting more
+     talkative rather than less - which is the correct direction for a signal you cannot trust. */
+  if (p === '/api/watching') {
+    watchingAt = Date.now();
+    watchingView = url.searchParams.get('view') || null;
+    if (url.searchParams.get('focus') === '0') watchingAt = 0;
+    return json(res, 200, { ok: true });
+  }
+
+  /* B13/B14/B15: whatever this host will actually tell us about its hardware. Served even when
+     empty, because "we asked and it refused" is a different answer from "we never asked". */
+  if (p === '/api/hardware') return json(res, 200, cachedHw || { pending: true,
+    note: PS_HOST ? 'not collected yet' : 'this platform has no hardware one-shot' });
+
+  if (p === '/api/alerts') {
+    if (req.method === 'POST') {
+      /* Viewer mode may not change how the machine behaves, and silencing the alarm is a change
+         to how the machine behaves. */
+      if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode cannot change alerting' });
+      notifier.enabled = url.searchParams.get('on') !== '0';
+      return json(res, 200, notifier.status());
+    }
+    return json(res, 200, notifier.status());
+  }
+
+  /* A one-shot so someone can find out whether notifications actually reach them on THIS machine,
+     rather than discovering the answer during the incident the feature exists for. */
+  if (p === '/api/alerts/test') {
+    if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode cannot send notifications' });
+    return notifier.probe()
+      .then(() => notifier.deliver('Test notification',
+        'If you can read this, VITALS can reach you when the panel is closed.'))
+      .then((ok) => json(res, 200, { ok, how: notifier.how, capable: notifier.capable }))
+      .catch((e) => json(res, 500, { ok: false, error: e.message }));
+  }
 
   if (p === '/api/diagnose') {
     const d = currentDiagnosis();

@@ -42,6 +42,7 @@ const KEYS = [
   'act.restartApp', 'act.clean', 'act.kill', 'act.elevate',
   'host.frameless', 'host.tray',
   'self.verify',
+  'disk.smart', 'sys.irq', 'npu.util', 'alert.notify',
 ];
 
 const PLATFORMS = {
@@ -67,6 +68,18 @@ const PLATFORMS = {
       'host.frameless': true, 'host.tray': true,
       /* All three comparisons run and are independent here; observed agreeing on this machine. */
       'self.verify': true,
+      /* MEASURED unelevated on this machine 2026-08-01: Get-PhysicalDisk answers with the drive's
+         own HealthStatus, while BOTH MSStorageDriver_FailurePredictStatus and
+         Get-StorageReliabilityCounter return access-denied. Health is free; the wear numbers need
+         the elevated one-shot. 'partial' is the honest word, and the wear fields report null
+         rather than zero when they could not be read. */
+      'disk.smart': 'partial',
+      'sys.irq': true,
+      /* NO NPU on the reference machine (i7-1165G7, 2021) - the NPU Engine counter set does not
+         exist, so this code has never returned a reading. Written from the documented counter
+         shape and declared FALSE, because a flag in this file means observed. */
+      'npu.util': false,
+      'alert.notify': true,
     },
     notes: {
       'cpu.temps': 'Windows exposes no CPU temperature to unprivileged code. Present only when ' +
@@ -158,6 +171,13 @@ const PLATFORMS = {
          /proc/uptime the collector does, so two of the three comparisons are declared dependent
          and not run. 'partial' is the honest word for a cross-check with one leg. */
       'self.verify': 'partial',
+      /* Unwritten rather than unavailable: smartctl and /sys/class/nvme would answer, and
+         /proc/interrupts carries the counts. Declared false because nothing reads them yet -
+         "not built" and "not possible" are different claims. */
+      'disk.smart': false,
+      'sys.irq': false,
+      'npu.util': false,
+      'alert.notify': 'partial',
     },
     notes: {
       'cpu.temps': '/sys/class/thermal and hwmon, when the platform driver publishes them. Bare ' +
@@ -297,6 +317,10 @@ const PLATFORMS = {
          file's rule is that a flag means observed rather than implemented, and until that run there
          was code but no evidence. */
       'self.verify': true,
+      'disk.smart': false,
+      'sys.irq': false,
+      'npu.util': false,
+      'alert.notify': 'partial',
     },
     notes: {
       'cpu.perCore': 'os.cpus() per-core tick counters, differenced between ticks like /proc/stat ' +

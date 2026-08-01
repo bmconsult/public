@@ -553,6 +553,75 @@ function diagnose(tick, hist, extra = {}) {
     }
   }
 
+  /* ---------- B13: the drive is telling you it is failing ----------
+   * The most valuable sentence a monitor can say, and the one with the shortest useful window.
+   * Every other finding here is about performance; this one is about whether the data survives the
+   * week. It fires on the drive's OWN verdict rather than on an inference, which is why it is
+   * allowed to be this loud on this little evidence. */
+  const hw = extra.hw;
+  if (hw && Array.isArray(hw.disks)) {
+    for (const d of hw.disks) {
+      const sick = d.health && d.health !== 'Healthy';
+      const predicted = (hw.failurePredict || []).some((x) => x.predictFailure);
+      if (sick || predicted) {
+        add({
+          id: 'drive_health', sev: S.CRIT,
+          title: `${d.name || 'A drive'} reports its own health as ${sick ? d.health : 'failing'}`,
+          because: `This is not an inference from performance — it is the drive's own firmware ` +
+                   `reporting through SMART. Back up now, before anything else on this page. A ` +
+                   `drive that has begun reallocating sectors can stay usable for months or fail ` +
+                   `this afternoon, and nothing here can tell you which.`,
+          evidence: [
+            `health ${d.health}${d.opState ? ' · ' + d.opState : ''}`,
+            `${d.media || 'disk'}${d.sizeGB ? ' · ' + d.sizeGB + ' GB' : ''}${d.bus ? ' · ' + d.bus : ''}`,
+            d.wearPct != null ? `wear ${d.wearPct}%` : 'wear and error counts need elevation to read',
+            predicted ? 'the driver is predicting failure' : 'no failure prediction flag set',
+          ],
+          action: 'Copy anything irreplaceable off this drive today. Then replace it.',
+          confidence: 'high',
+        });
+      } else if (d.wearPct != null && d.wearPct >= 80) {
+        add({
+          id: 'drive_wear', sev: d.wearPct >= 90 ? S.WARN : S.INFO,
+          title: `${d.name || 'The drive'} has used ${d.wearPct}% of its rated write endurance`,
+          because: `SSDs wear by writing. At this level the drive still reports healthy and will ` +
+                   `keep working, but the remaining life is a fraction of what it was — worth ` +
+                   `knowing before it becomes urgent rather than after.`,
+          evidence: [`wear ${d.wearPct}%`,
+                     d.powerOnHours != null ? `${d.powerOnHours} power-on hours` : 'power-on hours unavailable',
+                     d.tempC != null ? `${d.tempC} °C` : 'temperature unavailable'],
+          action: 'Nothing urgent. Plan a replacement rather than react to one.',
+          confidence: 'high',
+        });
+      }
+    }
+  }
+
+  /* ---------- B14: the machine is spending its time on interrupts ----------
+   * Reported as a TIME SHARE, which is what the counters actually measure. Worst-case DPC latency
+   * in microseconds - the number LatencyMon prints and the one people quote - needs an ETW kernel
+   * session or a driver, and is not available here. Saying "DPC time is 12% of the CPU" is true;
+   * printing a microsecond figure derived from it would not be, and this engine would rather be
+   * quiet than confidently wrong about a unit. */
+  if (hw && hw.irq && typeof hw.irq.dpcPct === 'number') {
+    const load = hw.irq.dpcPct + (hw.irq.intPct || 0);
+    if (load >= 10) {
+      add({
+        id: 'irq_load', sev: load >= 20 ? S.WARN : S.INFO,
+        title: `${load.toFixed(1)}% of CPU time is going to interrupts and deferred driver work`,
+        because: `That work happens at higher priority than anything you started, so it is felt ` +
+                 `as stutter and dropped audio rather than as a busy CPU. It is almost always one ` +
+                 `driver — commonly network, storage or a virtualisation filter.`,
+        evidence: [
+          `DPC ${hw.irq.dpcPct.toFixed(2)}% · interrupts ${(hw.irq.intPct || 0).toFixed(2)}%`,
+          'time share, not latency — worst-case DPC latency needs a kernel trace and is not measured here',
+        ],
+        action: 'Update network and storage drivers first; they account for most of this.',
+        confidence: 'medium',
+      });
+    }
+  }
+
   f.sort((a, b) => b.sev - a.sev);
   const crit = f.filter((x) => x.sev === S.CRIT);
   const summary = !f.length
