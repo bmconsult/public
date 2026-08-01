@@ -115,6 +115,65 @@ class Outcomes {
     };
   }
 
+  /* ---------- B18: THE SELF-QUARANTINING FINDING ----------
+   *
+   * A rule that keeps firing on this machine and keeps turning out not to matter is worse than a
+   * rule that does not exist, because it trains the reader to skim. The outcomes ledger already
+   * knows which findings those are - it records every cycle and how long each took to clear - and
+   * nothing was reading it back to judge the rules themselves.
+   *
+   * A finding QUARANTINES ITSELF here when this machine's own record says it is noise:
+   *
+   *   - it has fired at least MIN_CYCLES times, so this is a pattern rather than an anecdote, and
+   *   - the median cycle cleared in under NOISE_SEC, meaning it went away on its own before
+   *     anybody could plausibly have acted on it.
+   *
+   * A finding that clears in forty seconds, thirty times, did not describe a problem. It described
+   * a machine doing its job. Demoting it is not hiding it: the finding still appears, one severity
+   * lower, carrying the reason and the count - and it RE-TESTS itself, because a rule that was
+   * noise last month can be the real thing this month and a permanent silence would be the worse
+   * error. The quarantine is computed from a rolling window, so it lifts by itself the moment the
+   * pattern changes.
+   *
+   * This is per-machine on purpose. The same rule can be signal on one box and noise on another,
+   * which is exactly why the judgement has to be made from the local record rather than shipped
+   * as a threshold in the source.
+   */
+  quarantine(id) {
+    const MIN_CYCLES = 6;
+    const NOISE_SEC = 90;
+    const WINDOW_DAYS = 14;
+
+    const cutoff = Date.now() - WINDOW_DAYS * 86400_000;
+    const durs = [];
+    for (const r of this.recent(4000)) {
+      if (r.ev !== 'cleared' || r.id !== id) continue;
+      if (!r.at || r.at < cutoff) continue;
+      if (typeof r.durSec === 'number') durs.push(r.durSec);
+    }
+    if (durs.length < MIN_CYCLES) {
+      return { id, quarantined: false, cycles: durs.length,
+               why: `only ${durs.length} completed cycle${durs.length === 1 ? '' : 's'} in the ` +
+                    `last ${WINDOW_DAYS} days — ${MIN_CYCLES} are needed before this machine's ` +
+                    `record may judge a rule` };
+    }
+    durs.sort((a, b) => a - b);
+    const median = durs[Math.floor((durs.length - 1) / 2)];
+    if (median >= NOISE_SEC) {
+      return { id, quarantined: false, cycles: durs.length, medianSec: median,
+               why: `median cycle ${Math.round(median)} s — long enough to have mattered` };
+    }
+    return {
+      id, quarantined: true, cycles: durs.length, medianSec: median,
+      windowDays: WINDOW_DAYS,
+      /* The sentence the panel prints. It has to carry the evidence, because "we decided to trust
+         this less" without the number behind it is indistinguishable from a bug. */
+      why: `on this machine it has fired ${durs.length} times in ${WINDOW_DAYS} days and the ` +
+           `median cycle cleared in ${Math.round(median)} s — faster than anyone could act, so ` +
+           `the record says it is describing normal behaviour rather than a problem`,
+    };
+  }
+
   recent(n) {
     let lines = [];
     try { lines = fs.readFileSync(this.file, 'utf8').split('\n').filter(Boolean); } catch {}

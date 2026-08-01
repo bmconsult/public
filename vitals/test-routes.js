@@ -113,6 +113,10 @@ const DEGRADES_GRACEFULLY = {
                    '(pending reboot, recycle bin, defrag) are absent, and those are Windows remedies',
   '/api/ask': 'reaches PS only through currentDiagnosis() when grounding the prompt; the Claude ' +
               'CLI itself is not PowerShell',
+  '/api/quarantine': 'reads the outcomes ledger, which is pure Node JSONL. It touches PowerShell ' +
+                     'only by calling currentDiagnosis() to learn which rules are firing — the ' +
+                     'same indirection /api/diagnose is exempted for, and gating it would remove ' +
+                     'a working feature from every non-Windows host',
   '/api/window/open': 'checks PS_HOST itself and answers {opened:false} off Windows. It MUST NOT ' +
                       '501 — the page needs that answer to fall back to window.open, and a 501 ' +
                       'would break the pop-out on exactly the platforms that have no native host',

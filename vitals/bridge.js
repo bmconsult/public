@@ -25,6 +25,7 @@ const { diagnose } = require('./diagnose');
 const { diagnoseAt } = require('./replay');
 const { Workloads } = require('./workload');
 const { Notifier } = require('./notify');
+const { correlate } = require('./correlate');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -1931,6 +1932,21 @@ const server = http.createServer((req, res) => {
 
   /* B13/B14/B15: whatever this host will actually tell us about its hardware. Served even when
      empty, because "we asked and it refused" is a different answer from "we never asked". */
+  /* B16: every declared relationship, measured over the live ring — including the ones that did
+     NOT qualify. A table of what was looked at is more useful than a filtered list of hits, and it
+     is what makes the absence of a correlation legible rather than invisible. */
+  if (p === '/api/correlate') {
+    const win = Math.max(60, Math.min(3600, +url.searchParams.get('n') || 1200));
+    return json(res, 200, correlate(hist.recent(win)));
+  }
+
+  /* B18: what this machine's own outcomes ledger says about each rule that is firing. */
+  if (p === '/api/quarantine') {
+    const d = currentDiagnosis();
+    const ids = [...new Set((d.findings || []).map((f) => f.id))];
+    return json(res, 200, { rules: ids.map((id) => outcomes.quarantine(id)) });
+  }
+
   if (p === '/api/hardware') return json(res, 200, cachedHw || { pending: true,
     note: PS_HOST ? 'not collected yet' : 'this platform has no hardware one-shot' });
 

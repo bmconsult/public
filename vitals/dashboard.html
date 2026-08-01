@@ -1103,6 +1103,10 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    took its full height out of a column whose other children carry min-height:0, so #sfAnat - the
    page's actual subject - collapsed to nothing and the cards ran over the footer. It now yields
    like everything else and scrolls internally when the window cannot hold it. */
+/* B18: a demotion is shown, never silent. Dashed rather than coloured — it is not a warning about
+   the machine, it is the tool telling you it trusts one of its own rules less here. */
+.qtn{margin-top:6px;padding:5px 9px;border:1px dashed var(--line-2);border-radius:7px;
+  font-size:10.5px;line-height:1.45;color:var(--ink-3)}
 .sfx-chk{flex:0 1 auto;min-height:0;margin-top:16px;display:flex;flex-direction:column}
 .sfx-chk-h{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700;
   margin:0 0 9px;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
@@ -3282,10 +3286,10 @@ RENDER.diag=async()=>{
           ${chain||(hero?`<div class="dgx-ev">${(hero.evidence||[]).map(e=>`<span>${e}</span>`).join('')}</div>`:'')}
           ${hero?`<div class="dgx-do"><em>Do</em>${hero.action}<span style="white-space:nowrap">${confDots(hero.confidence)}</span></div>`:''}
           ${hero?leverHTML(hero):''}
-          ${hero&&hero.past?`<div class="dgx-past">${hero.past.text} <span style="opacity:.65;cursor:pointer;text-decoration:underline dotted" onclick="go('led')" title="open the full ledger">— outcomes ledger, this machine</span></div>`:''}
+          ${quarantineNote(hero)}${hero&&hero.past?`<div class="dgx-past">${hero.past.text} <span style="opacity:.65;cursor:pointer;text-decoration:underline dotted" onclick="go('led')" title="open the full ledger">— outcomes ledger, this machine</span></div>`:''}
         </div>
         ${rest.length?`<div class="dgx-rail"><div class="rl">Also found</div>
-          ${rest.map(f=>`<div class="drf ${f.sevName}"><b>${f.title}</b><span>${f.action}</span>${leverHTML(f)}${f.past?`<span class="past">↺ ${f.past.text}</span>`:''}</div>`).join('')}
+          ${rest.map(f=>`<div class="drf ${f.sevName}"><b>${f.title}</b><span>${f.action}</span>${leverHTML(f)}${f.past?`<span class="past">↺ ${f.past.text}</span>`:''}${quarantineNote(f)}</div>`).join('')}
         </div>`:''}
       </div>
       <div class="dgx-foot">
@@ -6267,6 +6271,14 @@ async function paintAlerts(){
 /* A6 on the page. Intent is listed because a user is entitled to know what the app remembers about
    them; anything UNCLASSIFIED is listed first and loudly, because that is the failure this audit
    exists to catch - a conclusion the machine reached, quietly outliving its evidence. */
+/* B18 on the page. A demoted finding must LOOK demoted and say why, otherwise the ledger is
+   silently overruling the engine and the reader has no way to know it happened. */
+function quarantineNote(f){
+  if(!f || !f.quarantined) return '';
+  const q=f.quarantined;
+  return '<div class="qtn">Trusted less on this machine · '+sysEsc(q.why)+'</div>';
+}
+
 function paintPersist(){
   const box=$('#sfPersist'); if(!box) return;
   const a=persistAudit();

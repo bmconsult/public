@@ -44,6 +44,8 @@ const FILES = [
   'workload.js', 'test-workload.js',
   // B4: proactive alerting, and the deeper hardware telemetry one-shot (B13/B14/B15).
   'notify.js', 'test-notify.js', 'hardware.ps1',
+  // B16 + B18: the correlation subsystem, and the ledger read back to judge its own rules.
+  'correlate.js', 'test-correlate.js',
   // Windows host + one-shots
   'panel.ps1', 'launch.ps1', 'metrics.ps1', 'winagent.ps1', 'clipwatch.ps1', 'mftscan.ps1',
   'iotrace.ps1', 'clean-admin.ps1', 'space-admin.ps1', 'filetools.ps1', 'badge.ps1', 'shot.ps1',

@@ -105,6 +105,19 @@ function diagnose(tick, hist, extra = {}) {
     // Attach this-machine history from the outcomes ledger, if the bridge passed one in.
     if (extra.outcomes) {
       try { const p = extra.outcomes.pastFor(o.id); if (p) o.past = { ...p, text: pastText(p) }; } catch {}
+      /* B18. A rule this machine's own record contradicts is DEMOTED, not deleted. It keeps its
+         place and its evidence and drops one severity, carrying the reason - because a finding
+         that vanished would be indistinguishable from a rule that stopped working, and because a
+         rule that is noise this month can be the real thing next month. The quarantine is computed
+         from a rolling window, so it lifts by itself when the pattern changes. */
+      try {
+        const q = extra.outcomes.quarantine(o.id);
+        if (q && q.quarantined && o.sev > S.INFO) {
+          o.quarantined = q;
+          o.sev = o.sev - 1;
+          o.confidence = 'low';
+        }
+      } catch {}
     }
     f.push(o);
   };
