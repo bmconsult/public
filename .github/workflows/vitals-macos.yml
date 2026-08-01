@@ -123,6 +123,10 @@ jobs:
         if: always()
         run: node test-workload.js
 
+      - name: Panel script parses (node --check cannot see inside HTML)
+        if: always()
+        run: node test-dashboard.js
+
       # THE EVIDENCE STEP for `self.verify` on darwin, which is flagged FALSE in collect/caps.js
       # despite the code being complete - because that file's rule is that a flag means observed
       # working, not implemented. All three comparisons are independent here (vm_stat vs
