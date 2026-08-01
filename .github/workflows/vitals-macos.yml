@@ -135,6 +135,10 @@ jobs:
         if: always()
         run: node test-reproduce.js
 
+      - name: Experiments and the governor (B9/B12)
+        if: always()
+        run: node test-sweep.js && node test-governor.js
+
       # THE EVIDENCE STEP for `self.verify` on darwin, which is flagged FALSE in collect/caps.js
       # despite the code being complete - because that file's rule is that a flag means observed
       # working, not implemented. All three comparisons are independent here (vm_stat vs

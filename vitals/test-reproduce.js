@@ -55,14 +55,19 @@ console.log('--- it REFUSES to load a machine that is already in trouble ---');
 console.log('\n--- the bounds are bounds, not suggestions ---');
 {
   const r = new Reproducer();
+  /* Captured BEFORE the ballast is allocated. The first version compared the ballast against
+     os.freemem() read AFTER starting - so the allocation itself moved the number it was being
+     judged against, and a correctly-sized ballast failed its own check. A budget measured after
+     spending it is not a budget. */
+  const freeBeforeMB = os.freemem() / 1048576;
   const started = r.start(profile({ seconds: 99999 }), tick(), { seconds: 99999 });
   check('a request for forever is capped', started.ok && started.remainingSec <= MAX_SEC,
     started.remainingSec);
   check('it never takes every core', r.running.workers <= os.cpus().length - 1,
     `${r.running.workers} of ${os.cpus().length}`);
-  check('memory ballast is a share of what is FREE, not of what was recorded',
-    r.running.memMB <= Math.round((os.freemem() / 1048576) * MAX_MEM_SHARE) + 1,
-    `${r.running.memMB} MB`);
+  check('memory ballast is a share of what was FREE, not of what was recorded',
+    r.running.memMB <= Math.round(freeBeforeMB * MAX_MEM_SHARE) + 1,
+    `${r.running.memMB} MB of a ${Math.round(freeBeforeMB * MAX_MEM_SHARE)} MB budget`);
   const st = r.status();
   check('status reports what it is doing', st.running === true && st.workers > 0);
   check('and repeats the caveat in every payload', /resource PRESSURE, not the programs/.test(st.caveat));

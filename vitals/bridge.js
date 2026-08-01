@@ -28,6 +28,8 @@ const { Notifier } = require('./notify');
 const { correlate } = require('./correlate');
 const { Scheduler, BootTrial } = require('./schedule');
 const { Reproducer, profileFrom } = require('./reproduce');
+const { Governor } = require('./governor');
+const { Sweep } = require('./sweep');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -1489,12 +1491,25 @@ let cachedHw = null;
      signal to an unrelated caller. */
 const jobs = new Scheduler({ minGapMs: 4000 });
 
-jobs.every('growth', 600_000, () => {
+/* B12 in force: the deferrable jobs ask the governor first. The diagnosis loop and the self-check
+   are NOT deferrable and are not routed through it - an instrument that stops measuring when the
+   machine gets bad is measuring only the good times. What defers is the expensive, optional work:
+   filesystem diffs, process spawns, trend fits. */
+function deferrable(name, periodMs, fn) {
+  jobs.every(name, periodMs, async () => {
+    const d = gov.allow(name);
+    if (!d.run) { govDeferrals.push({ at: Date.now(), name, why: d.why }); if (govDeferrals.length > 50) govDeferrals.shift(); return; }
+    return fn();
+  });
+}
+let govDeferrals = [];
+
+deferrable('growth', 600_000, () => {
   const snaps = hist.snapshots();
   cachedGrowth = snaps.length >= 2 ? hist.growth(snaps[0].file, snaps[snaps.length - 1].file) : null;
 });
 
-jobs.every('trend', 600_000, () => {
+deferrable('trend', 600_000, () => {
   cachedTrend = { diskFree: hist.trend('diskFreeGB', 14) };
 });
 
@@ -1502,10 +1517,10 @@ jobs.every('trend', 600_000, () => {
    process that could not exist, every ten minutes, forever, and binned the failure in a callback
    that discarded its error. */
 if (PS_HOST) {
-  jobs.every('hardware', 600_000, () => new Promise((res) => {
+  deferrable('hardware', 600_000, () => new Promise((res) => {
     ps(SCRIPTS.hardware, (e, d2) => { if (!e && d2) cachedHw = d2; res(); });
   }));
-  jobs.every('maintenance', 600_000, () => new Promise((res) => {
+  deferrable('maintenance', 600_000, () => new Promise((res) => {
     ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; res(); });
   }));
 }
@@ -1527,6 +1542,10 @@ const replay = new Reproducer();
 /* If the bridge is going down, so is the load. A stress loop that outlives the thing that started
    it is the worst possible bug in this module. */
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { try { replay.stop('the bridge is shutting down'); } catch {} });
+
+/* B12. The panel reports its own frame intervals; the decision lives here, once, so every job asks
+   the same question of the same evidence. */
+const gov = new Governor();
 
 const boot = new BootTrial();
 boot.run({
@@ -2057,6 +2076,67 @@ const server = http.createServer((req, res) => {
       return json(res, 200, prof || { error: 'nothing recorded in that window' });
     }
     return json(res, 200, replay.status());
+  }
+
+  /* B12: the panel posts the frame intervals it just measured. Intervals, not a verdict — the
+     decision belongs in one place and the panel is not it. */
+  /* B9. The sweep's statistics — the multiple-comparison correction and the calibrated bar — live
+     in exactly ONE file, and the panel needs them too. Serving the module rather than porting it is
+     what stops the browser copy and the Node copy drifting apart, which for a significance bar
+     would mean two different definitions of "measurable" with no way to tell which produced a
+     receipt. The shim below adapts CommonJS to a global; the arithmetic is untouched. */
+  if (p === '/sweep.js') {
+    try {
+      const src = require('fs').readFileSync(require('path').join(HERE, 'sweep.js'), 'utf8');
+      const wrapped = [
+        '(function(){const module={exports:{}};const exports=module.exports;',
+        src,
+        'window.__SweepCtor=module.exports.Sweep;',
+        'window.__sweepStats={median:module.exports.median,mad:module.exports.mad};',
+        '})();',
+      ].join('\n');
+      res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8',
+                           'Cache-Control': 'no-store' });
+      return res.end(wrapped);
+    } catch (e) { return json(res, 500, { error: e.message }); }
+  }
+
+  if (p === '/api/frames') {
+    return readBody(req, (b) => {
+      try { gov.report(b && b.intervals); } catch (e) { console.error('[gov]', e.message); }
+      json(res, 200, { ok: true });
+    });
+  }
+
+  if (p === '/api/governor') {
+    return json(res, 200, { ...gov.status(), deferred: govDeferrals.slice(-15) });
+  }
+
+  /* B9: sweep a setting and keep the receipt. The sweep itself is driven by the PANEL, which is the
+     only thing that can apply a rendering dial and measure its own cost — the bridge stores the
+     receipt so it survives the page being closed and can be compared against later. */
+  if (p === '/api/sweep') {
+    if (req.method === 'POST') {
+      if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode does not run experiments' });
+      return readBody(req, (b) => {
+        const r = b && b.receipt;
+        if (!r || !r.name) return json(res, 400, { error: 'need a receipt' });
+        try {
+          journal.write([{ sev: 'info', kind: 'act',
+            msg: `sweep "${r.name}": ${r.distinguishable ? 'best ' + JSON.stringify(r.best) : 'no measurable difference'}` }]);
+          const line = JSON.stringify({ ...r, trace: undefined, at: Date.now() });
+          require('fs').appendFileSync(require('path').join(HIST_DIR, 'sweeps.jsonl'), line + '\n');
+        } catch (e) { return json(res, 500, { error: e.message }); }
+        return json(res, 200, { ok: true });
+      });
+    }
+    let rows = [];
+    try {
+      rows = require('fs').readFileSync(require('path').join(HIST_DIR, 'sweeps.jsonl'), 'utf8')
+        .split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean);
+    } catch { /* none yet */ }
+    return json(res, 200, { receipts: rows.slice(-40) });
   }
 
   if (p === '/api/schedule') {

@@ -152,6 +152,10 @@ jobs:
         if: always()
         run: node test-reproduce.js
 
+      - name: Experiments and the governor (B9/B12)
+        if: always()
+        run: node test-sweep.js && node test-governor.js
+
       # The fold suite above uses stubs and says so; it would stay green on a kernel where the two
       # "independent" sources are secretly the same file. THIS runs the real collector against the
       # real second source and publishes what they did. On linux only the memory bound is genuinely

@@ -5687,6 +5687,95 @@ function gtmHook() {
 }
 
 
+
+/* ================= B12: the frame-interval reporter =================
+ * The panel is a real foreground GUI process on this machine, so its frame intervals ARE foreground
+ * stall — not a proxy for it. This measures them and posts them; the governor in the bridge decides
+ * what to do, once, so every background job asks the same question of the same evidence.
+ *
+ * PresentMon was the obvious source and was ruled out by checking rather than by assuming:
+ * PresentMonSharedService runs on this machine but publishes no counter set, so its frame data
+ * needs the SDK or an ETW session. This needs neither and measures the thing directly.
+ *
+ * It reports INTERVALS, never a verdict. A panel that decided for itself would put the policy in
+ * the surface that happens to be open, and there can be two of those. */
+const FRAMES = { buf: [], last: 0, sending: false };
+(function frameWatch(){
+  const tick = (now) => {
+    if (FRAMES.last) {
+      const dt = now - FRAMES.last;
+      /* A gap over a second is the tab being throttled or backgrounded, not a stall the user felt.
+         Recording it would manufacture jank out of the browser's own power saving. */
+      if (dt > 0 && dt < 1000) FRAMES.buf.push(+dt.toFixed(1));
+    }
+    FRAMES.last = now;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+
+  setInterval(() => {
+    if (!FRAMES.buf.length || FRAMES.sending) return;
+    /* Nothing is sent while hidden: those intervals describe a tab the compositor stopped driving,
+       and the governor treats an ABSENT signal correctly, whereas a misleading one it cannot. */
+    if (document.hidden) { FRAMES.buf.length = 0; return; }
+    const batch = FRAMES.buf.splice(0, FRAMES.buf.length);
+    FRAMES.sending = true;
+    fetch(API('/api/frames'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ intervals: batch }) })
+      .catch(() => {})
+      .finally(() => { FRAMES.sending = false; });
+  }, 2000);
+})();
+
+/* ================= B9: run a sweep from the panel =================
+ * The panel is the only thing that can both APPLY a rendering dial and MEASURE what it costs, so
+ * the experiment runs here and the receipt is posted to the bridge, where it outlives the page.
+ *
+ * The cost measured is the panel's own frame time, because that is what a rendering dial actually
+ * changes. Measuring machine-wide CPU would fold in every other program on the box, which is the
+ * noise this design exists to defeat rather than to import. */
+/* Loaded on demand from the bridge, so the browser and the bridge share ONE definition of the
+   significance bar. Two copies of a statistic is two definitions of "measurable". */
+function loadSweepEngine(){
+  if (window.__SweepCtor) return Promise.resolve(true);
+  return new Promise((res) => {
+    const sc = document.createElement('script');
+    sc.src = API('/sweep.js');
+    sc.onload = () => res(!!window.__SweepCtor);
+    sc.onerror = () => res(false);
+    document.head.appendChild(sc);
+  });
+}
+
+async function runSweep(name, cssVar, values, rounds){
+  if (!(await loadSweepEngine())) return { ok:false, error:'could not load the sweep engine from the bridge' };
+  const S2 = window.__SweepCtor;
+  const before = document.documentElement.style.getPropertyValue(cssVar);
+  const sw = new S2({
+    settleMs: 1200,
+    apply: async (v) => { document.documentElement.style.setProperty(cssVar, String(v)); },
+    /* One sample = the median frame interval over a fixed window. Median, not mean, for the same
+       reason everything else here uses one: a single hitch would otherwise decide the arm. */
+    measure: async () => {
+      FRAMES.buf.length = 0;
+      await new Promise(r => setTimeout(r, 1800));
+      const xs = FRAMES.buf.slice().sort((a,b)=>a-b);
+      return xs.length ? xs[Math.floor(xs.length/2)] : NaN;
+    },
+  });
+  const receipt = await sw.run(name, values, rounds || 7);
+  /* The dial is put back exactly as it was. An experiment that leaves the machine in its last
+     tested state is not an experiment, it is a change nobody asked for. */
+  if (before) document.documentElement.style.setProperty(cssVar, before);
+  else document.documentElement.style.removeProperty(cssVar);
+  if (receipt.ok) {
+    try { await fetch(API('/api/sweep'), { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ receipt }) }); } catch {}
+  }
+  return receipt;
+}
+window.__vitalsSweep = runSweep;
+
 /* ================= B20: PULSE — rotated attraction =================
  * A particle system whose parameters are the machine's measured pressure. It is on the FX page
  * rather than the overview because it is a mood instrument, not a gauge: it answers "is this

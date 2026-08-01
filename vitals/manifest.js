@@ -56,6 +56,10 @@ const FILES = [
   // B7 + B10: replaying a recorded moment (the only thing here that deliberately loads the
   // machine, hence the bounds inside it), and the reversible quarantine ladder.
   'reproduce.js', 'test-reproduce.js', 'quarantine.ps1',
+  // B9 + B12: settings as experiments with receipts, and the governor that throttles background
+  // work against measured foreground stall rather than against CPU load. sweep.js is also SERVED
+  // to the panel at /sweep.js, so the significance bar has exactly one definition.
+  'sweep.js', 'test-sweep.js', 'governor.js', 'test-governor.js',
   // Windows host + one-shots
   'panel.ps1', 'launch.ps1', 'metrics.ps1', 'winagent.ps1', 'clipwatch.ps1', 'mftscan.ps1',
   'iotrace.ps1', 'clean-admin.ps1', 'space-admin.ps1', 'filetools.ps1', 'badge.ps1', 'shot.ps1',
