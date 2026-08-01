@@ -120,6 +120,36 @@ jobs:
         if: always()
         run: node test-inspect-posix.js
 
+      - name: Self-check fold (stubs - passes anywhere, proves the arithmetic)
+        if: always()
+        run: node test-selfcheck.js
+
+      - name: Storage substrate — histograms (A2)
+        if: always()
+        run: node test-hist.js
+
+      - name: Storage substrate — rollups, both formats, compaction (A2)
+        if: always()
+        run: node test-history.js
+
+      - name: Rewind — the engine at a past moment (B1)
+        if: always()
+        run: node test-replay.js
+
+      - name: Workloads — per-program percentiles, job vs machine (B5/B6)
+        if: always()
+        run: node test-workload.js
+
+      # The fold suite above uses stubs and says so; it would stay green on a kernel where the two
+      # "independent" sources are secretly the same file. THIS runs the real collector against the
+      # real second source and publishes what they did. On linux only the memory bound is genuinely
+      # independent - libuv reads the same /proc/stat and /proc/uptime the collector does, so the
+      # other two are declared dependent and skipped rather than counted. This step is the evidence
+      # behind `self.verify: partial` in collect/caps.js.
+      - name: LIVE agreement record (the self-check against a real kernel)
+        if: always()
+        run: node selfcheck-live.js --samples 16
+
       # THE ONE THAT MATTERS. Cross-checks the running collector against df, free, nproc and
       # /proc/meminfo - independent authorities, because a collector agreeing with itself proves
       # nothing. This has only ever run under WSL.

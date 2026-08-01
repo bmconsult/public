@@ -52,7 +52,17 @@ function collector() {
       if (caps.missing.length) {
         console.error(`[collect] unavailable here: ${caps.missing.join(', ')}`);
       }
-      return plug.start(root, handlers);
+      /* Every plug destructures its handlers and calls them unguarded, so a caller that wants
+         only ticks used to take the process down inside the stream callback - a crash in the
+         collector, blamed on the collector, caused by the call site. Defaulted here rather than
+         in three plugs, because this factory is the only door they are entered through. */
+      const h = handlers || {};
+      return plug.start(root, {
+        ...h,                                    // spread FIRST: an explicit undefined must not win
+        onStatic: h.onStatic || (() => {}),
+        onTick: h.onTick || (() => {}),
+        onError: h.onError || ((e) => console.error('[collect] ' + e)),
+      });
     },
   };
 }

@@ -22,6 +22,8 @@ const fs = require('fs');
 const path = require('path');
 const { History, readJsonFile } = require('./history');
 const { diagnose } = require('./diagnose');
+const { diagnoseAt } = require('./replay');
+const { Workloads } = require('./workload');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -34,6 +36,15 @@ const PORT = +process.env.VITALS_PORT || 8790;
 const HERE = __dirname;
 const HIST_DIR = path.join(HERE, 'history');
 const hist = new History(HIST_DIR);
+/* B5/B6. Sessions are periods of OBSERVED activity per named executable, not process lifetimes -
+   `tick.proc` is a top-16, so a program going quiet drops off it and absence is not an exit. */
+const work = new Workloads(HIST_DIR);
+work.prune();
+/* Close the open sessions on the way out, so the run in progress is not lost. Without this, a
+   machine that is only ever shut down normally would accumulate a baseline of nothing. */
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { try { work.flush(); hist.flush(); } catch {} process.exit(0); });
+}
 const outcomes = new Outcomes(HIST_DIR);
 let ctl = null;   // constructed after ps() is defined below
 /* Resolved to an absolute path, not left to PATH - see pshost.js for the failure that taught us. */
@@ -374,6 +385,14 @@ function psOnly(res, feature) {
 }
 
 let latest = null;         // most recent tick
+
+/* THE COLLECTOR THAT CHECKS ITSELF (B17). caps.js declares what a host CANNOT answer; nothing
+   declared what happens when it answers WRONGLY. This compares the fast path against an
+   independent one on a duty cycle and publishes the agreement - see selfcheck.js for why that is
+   agreement and deliberately not an error bar. */
+const { SelfCheck } = require('./selfcheck');
+const selfCheck = new SelfCheck();
+let selfTick = 0;
 let staticInfo = null;     // one-time machine description
 /* One walker at a time. Two concurrent walks of the same tree would race each other's snapshots
    and halve each other's I/O; the route answers 409 instead. */
@@ -454,6 +473,25 @@ function startMetrics() {
       if (lhm) msg.sensors = lhm;
       latest = msg;
       try { hist.add(msg); } catch (e) { console.error('[history]', e.message); }
+      /* B5/B6: per-workload sessions. Wrapped for the same reason history is - an accounting
+         layer that can take the collector down is worse than no accounting layer. */
+      try { work.add(msg); } catch (e) { console.error('[workload]', e.message); }
+      /* SELF-CHECK, on a duty cycle. The collector's reading is compared against a second,
+         independent path into the kernel (see selfcheck.js), which owns the cadence: fast until it
+         has enough samples to say anything, sparse thereafter. It runs server-side with the rest of
+         the record for the same reason the diagnosis does: an audit that only happens while someone
+         is looking is an audit of the moments nobody needed it.
+         Wrapped, because a verification that can take the bridge down is worse than no
+         verification - the whole point of it is to be the thing that never lies. */
+      if (selfCheck.due(++selfTick)) {
+        /* Fire and forget: the check spans a second of its own and must never delay a tick or
+           take the bridge down with it. Both the throw and the rejection are caught - it is a
+           diagnostic, and a diagnostic that can kill the thing it diagnoses is a liability. */
+        try {
+          Promise.resolve(selfCheck.check(msg))
+            .catch((e) => console.error('[selfcheck]', e && e.message));
+        } catch (e) { console.error('[selfcheck]', e.message); }
+      }
       broadcast('tick', msg);
     },
     onError(text) { process.stderr.write(String(text)); },
@@ -1406,6 +1444,7 @@ let cachedGrowth = null, growthAt = 0;
  * as growth and for the same reason - it is file I/O over the rollup day-files, and free space
  * does not develop a new multi-day trend between two 30 s diagnosis passes. */
 let cachedTrend = null, trendAt = 0;
+let cachedWl = [], wlAt = 0;
 function currentDiagnosis() {
   if (Date.now() - growthAt > 600000) {
     growthAt = Date.now();
@@ -1429,7 +1468,21 @@ function currentDiagnosis() {
     maintAt = Date.now();
     ps(SCRIPTS.maint, (e, d2) => { if (!e && d2) cachedMaint = d2; });
   }
-  const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint, trend: cachedTrend });
+  /* B6 verdicts, on the same slow clock as the other derived signals. Recomputing them per tick
+     would re-merge every past session's histograms once a second to answer a question that changes
+     over minutes. Only workloads with a live session are asked: a verdict about a program that is
+     not running is a finding nobody can act on. */
+  if (Date.now() - wlAt > 120_000) {
+    wlAt = Date.now();
+    try {
+      cachedWl = work.list()
+        .filter((w) => w.live)
+        .map((w) => work.verdict(w.name))
+        .filter((v) => v && v.ok && v.call !== 'normal');
+    } catch (e) { cachedWl = []; console.error('[workload]', e.message); }
+  }
+  const d = diagnose(latest, hist, { growth: cachedGrowth, outcomes, maint: cachedMaint,
+                                     trend: cachedTrend, workloads: cachedWl });
   outcomes.observe(d, latest);
   return d;
 }
@@ -1651,6 +1704,9 @@ const server = http.createServer((req, res) => {
      the support bundle embeds it - so a bug report from a Mac carries the fact that its collector
      has never been verified, rather than leaving someone to wonder why the GPU ring is missing. */
   if (p === '/api/caps') return json(res, 200, applyMode(CAPS));
+  /* The instrument's own agreement record. Read-only and safe in viewer mode - it describes the
+     measuring, not the machine. */
+  if (p === '/api/selfcheck') return json(res, 200, selfCheck.summary());
 
   /* ---- MODE ----
      GET reports it. POST can only ever tighten: admin -> viewer is allowed, viewer -> admin is not,
@@ -1719,7 +1775,71 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/api/recent') return json(res, 200, hist.recent(+url.searchParams.get('n') || 300));
-  if (p === '/api/history') return json(res, 200, hist.range(+url.searchParams.get('days') || 7));
+  /* HISTORY SPEAKS v1 BY DEFAULT, and that is a compatibility decision rather than laziness.
+     Its consumer is the MCP `vitals_history` tool, whose output goes to a language model as raw
+     JSON. A v2 row's index 1 is the MAXIMUM where v1's was the average, so shipping the new shape
+     unannounced would not error - it would have the model confidently narrate peak values as
+     typical ones. `?dist=1` returns the rows verbatim for anything that knows the difference. */
+  if (p === '/api/history') {
+    const days = +url.searchParams.get('days') || 7;
+    const rows = hist.range(days);
+    if (url.searchParams.get('dist') === '1') return json(res, 200, rows);
+    return json(res, 200, rows.map((r) => {
+      const out = { t: r.t, n: r.n };
+      for (const k of Object.keys(r)) {
+        if (k === 't' || k === 'n' || k === 'v') continue;
+        const tri = History.tripleOf(r, k);
+        if (tri) out[k] = tri;
+      }
+      return out;
+    }));
+  }
+
+  /* B5: what each program costs, in percentiles rather than an average — and B6, the verdict on
+     whether a given workload is behaving unusually, or the machine is.
+     `?name=` returns one workload's full profile plus its verdict; bare returns the list. */
+  if (p === '/api/workloads') {
+    const name = url.searchParams.get('name');
+    if (name) {
+      const prof = work.profile(name);
+      if (!prof) return json(res, 404, { error: 'no record for that workload', name });
+      return json(res, 200, { ...prof, verdict: work.verdict(name) });
+    }
+    const list = work.list();
+    return json(res, 200, {
+      /* The sampling caveat travels with the data rather than living only in the docs: everything
+         here is drawn from a top-16-by-memory list, so a program that never enters it has no
+         record at all, and one that drops out has a gap rather than an ending. */
+      note: 'sessions are periods of OBSERVED activity — tick.proc is a top-16 by memory, so a ' +
+            'program dropping off that list is a gap in observation, not an exit',
+      workloads: list.map((w) => ({ ...w, verdict: work.verdict(w.name) })),
+    });
+  }
+
+  /* B1: the log-time band — one column per pixel across the whole record, each a histogram merge.
+     Cheap for the same reason the substrate exists: every zoom level comes from one stored
+     resolution, so a quarter and a minute cost the same query. */
+  if (p === '/api/band') {
+    const key = url.searchParams.get('key') || 'cpu';
+    const cols = +url.searchParams.get('cols') || 160;
+    const oldestSec = +url.searchParams.get('oldest') || 90 * 86400;
+    return json(res, 200, hist.band(key, { cols, oldestSec }));
+  }
+
+  /* A2: percentiles over any span, merged from the stored minute buckets plus the live ring.
+     `covered` and `v1Rows` ride along because a p95 drawn from the half of a window that happens
+     to carry distributions, presented as though it covered the whole window, is the confident
+     wrong number this substrate exists to stop producing. */
+  if (p === '/api/percentiles') {
+    const key = url.searchParams.get('key') || 'cpu';
+    const to = +url.searchParams.get('to') || Date.now();
+    const from = +url.searchParams.get('from') || (to - 3600_000);
+    const qs = (url.searchParams.get('q') || '0.5,0.95,0.99').split(',').map(Number)
+      .filter((q) => q > 0 && q < 1);
+    if (!qs.length) return json(res, 400, { error: 'no valid quantiles requested' });
+    const out = hist.percentiles(key, from, to, qs);
+    return json(res, 200, out || { key, from, to, n: 0, note: 'nothing recorded in that window' });
+  }
   if (p === '/api/snapshots') return json(res, 200, hist.snapshots());
 
   if (p === '/api/growth') {
@@ -1773,6 +1893,27 @@ const server = http.createServer((req, res) => {
        Same redaction ask.js uses for the same reason: shape for the paths nobody predicted, value
        for the identifiers we already know. */
     return json(res, 200, MODE === 'viewer' ? scrubFindings(d) : d);
+  }
+
+  /* B1: REWIND. The same engine, pointed at a past moment instead of the live ring.
+     `t` is epoch ms. The response always carries `unavailable` - the archive holds what was
+     archived, and a rewound diagnosis is systematically shorter than a live one, so a quiet list
+     without that caveat would read as a quiet machine. Viewer redaction applies identically:
+     history is not a loophole in a promise made about the present. */
+  if (p === '/api/diagnose/at') {
+    const t = +url.searchParams.get('t');
+    if (!Number.isFinite(t) || t <= 0) return json(res, 400, { error: 'need ?t=<epoch ms>' });
+    if (t > Date.now()) return json(res, 400, { error: 'that moment has not happened yet' });
+    const liveVol = latest && latest.disk && (latest.disk.vols || [])
+      .find((v) => v.id === 'C:' || v.id === '/');
+    let d;
+    try {
+      d = diagnoseAt(hist, t, { outcomes, liveVolId: liveVol ? liveVol.id : null });
+    } catch (e) {
+      console.error('[rewind]', e.message);
+      return json(res, 500, { error: 'rewind failed', detail: e.message });
+    }
+    return json(res, 200, MODE === 'viewer' ? { ...scrubFindings(d), unavailable: d.unavailable } : d);
   }
 
   /* The outcomes ledger, readable: open findings with their lever history, plus the raw tail. */

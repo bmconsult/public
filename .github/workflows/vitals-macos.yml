@@ -103,6 +103,36 @@ jobs:
         if: always()
         run: node test-inspect-posix.js
 
+      - name: Self-check fold (stubs - passes anywhere, proves the arithmetic)
+        if: always()
+        run: node test-selfcheck.js
+
+      - name: Storage substrate — histograms (A2)
+        if: always()
+        run: node test-hist.js
+
+      - name: Storage substrate — rollups, both formats, compaction (A2)
+        if: always()
+        run: node test-history.js
+
+      - name: Rewind — the engine at a past moment (B1)
+        if: always()
+        run: node test-replay.js
+
+      - name: Workloads — per-program percentiles, job vs machine (B5/B6)
+        if: always()
+        run: node test-workload.js
+
+      # THE EVIDENCE STEP for `self.verify` on darwin, which is flagged FALSE in collect/caps.js
+      # despite the code being complete - because that file's rule is that a flag means observed
+      # working, not implemented. All three comparisons are independent here (vm_stat vs
+      # host_statistics64, iostat vs host_processor_info, collector uptime vs kern.boottime), so
+      # unlike linux this run has all three legs. Flip the flag when this passes, and paste the run
+      # URL beside it. Not before.
+      - name: LIVE agreement record on real Darwin
+        if: always()
+        run: node selfcheck-live.js --samples 16
+
       # The walker against a real macOS home directory: proves it survives genuine permission
       # walls, firmlinks and .app bundles, and that the snapshot it writes is one History.growth
       # can read. This is the live half of what the suite above simulates.

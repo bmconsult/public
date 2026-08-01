@@ -89,6 +89,15 @@ function diagnose(tick, hist, extra = {}) {
   /* The label every disk finding quotes. Hard-coding "C:" in the prose was the same Windows
      assumption one layer up: a finding that says "C: is 4% free" on a Mac is wrong twice. */
   const volId = vol ? vol.id : null;
+  /* "22.6 GB free of undefined GB". Total capacity is not archived, so a finding replayed from the
+     record interpolated `undefined` straight into its evidence - a measured number and a hole,
+     printed with identical confidence. The percentage is archived and says the same thing, so the
+     phrase degrades to it rather than to a placeholder. Live ticks are unaffected; this also
+     covers any platform whose volume reader omits a size. */
+  const freeOf = () => !vol ? ''
+    : vol.sizeGB != null
+      ? `${vol.freeGB} GB free of ${vol.sizeGB} GB`
+      : `${vol.freeGB} GB free (${(100 - vol.pct).toFixed(1)}% of the volume)`;
   const totalRamMB = tick.mem.totalMB;
   const suppress = new Set();
 
@@ -119,7 +128,7 @@ function diagnose(tick, hist, extra = {}) {
         `has no spare blocks left for wear-levelling, so every write it serves is slower than rated. ` +
         `Freeing disk unwinds it from both ends at once.`,
       evidence: [
-        `${volId} ${vol.freeGB} GB free of ${vol.sizeGB} GB (${(100 - vol.pct).toFixed(1)}% free)`,
+        `${volId} ${freeOf()}`,
         `RAM ${tick.mem.pct}% used, sustained (${ramTight ? Math.round(ramTight.frac * 100) + '% of last 2 min' : 'commit-based'})`,
         `Committed ${gb(tick.mem.committedMB)} GB vs ${gb(totalRamMB)} GB installed`,
         faulting ? `Hard faults averaging ${hist.stat('hardFaults', 120).avg}/s — actively paging to disk` : `Hard faults low right now`,
@@ -149,7 +158,7 @@ function diagnose(tick, hist, extra = {}) {
       title: `${volId} is ${(100 - vol.pct).toFixed(1)}% free — below the threshold where SSDs slow down`,
       because: `Below ~10% free an SSD runs out of spare blocks for wear-levelling and garbage ` +
                `collection; sustained write throughput can fall by more than half. Fully reversible.`,
-      evidence: [`${vol.freeGB} GB free of ${vol.sizeGB} GB`],
+      evidence: [freeOf()],
       action: 'Reclaim tab → clear Tier 1. Then archive the large directories under Growth.',
       confidence: 'high',
     });
@@ -357,7 +366,7 @@ function diagnose(tick, hist, extra = {}) {
         because: `Deleted files still occupy their blocks until the bin is emptied, so this space is ` +
                  `already yours - it is just not free yet. Cheapest reclaim available, and the only ` +
                  `one that needs no judgement about what the files are for.`,
-        evidence: [`${mt.recycleGB} GB across ${mt.recycleItems} item(s)`, `${vol.freeGB} GB free of ${vol.sizeGB} GB`],
+        evidence: [`${mt.recycleGB} GB across ${mt.recycleItems} item(s)`, freeOf()],
         action: 'Open the bin, look at what is in it, then empty it yourself. This tool deliberately ' +
                 'has no button for it: permanently destroying files belongs behind Explorer own confirmation.',
         lever: { kind: 'recycle-open' },
@@ -468,6 +477,79 @@ function diagnose(tick, hist, extra = {}) {
           confidence: tr.r2 >= 0.8 ? 'high' : 'medium',
         });
       }
+    }
+  }
+
+  /* ---------- B6: is it the machine, or is it the job? ----------
+   *
+   * The two findings this engine could not previously tell apart, and they have OPPOSITE fixes.
+   * "Your machine is slow" sends someone to clean their disk; "this job is heavy" tells them the
+   * machine is fine and the work grew. Getting it backwards wastes an afternoon in either
+   * direction, and every tool in this category conflates them because both look identical from a
+   * machine-wide average: high CPU, high I/O, slow.
+   *
+   * Telling them apart needs the comparison to hold the WORKLOAD fixed and vary only the machine.
+   * `workload.js` records, per session of a named program, both what that program cost and what the
+   * machine was like while it ran - so "the machine is under more pressure than it normally is
+   * WHILE THIS PROGRAM RUNS" is answerable, and it is a different question from "the machine is
+   * busy", which is merely a restatement of the complaint.
+   *
+   * Fired only from a verdict that cleared its own evidence bar (three past sessions minimum, and
+   * a percentile that moved by more than run-to-run noise). Anything less says nothing at all,
+   * which is correct: a verdict from one prior run distinguishes nothing while sounding exactly as
+   * confident as one from twenty. */
+  for (const v of (extra.workloads || [])) {
+    if (!v || !v.ok || v.call === 'normal') continue;
+    const j = v.job && v.job[0], m = v.machine && v.machine[0];
+    const num = (x) => (x >= 100 ? Math.round(x) : +x.toFixed(1));
+
+    if (v.call === 'machine') {
+      add({
+        id: 'wl_machine', sev: S.WARN,
+        title: `${v.name} is being slowed by the machine, not by its own work`,
+        because: `Held against its own past runs, ${v.name} is asking for no more than usual — but ` +
+                 `the machine is under more pressure than it normally is while ${v.name} runs. ` +
+                 `That comparison is the point: measured against the machine's all-time average ` +
+                 `this would just say "something heavy is running", which is the complaint, not ` +
+                 `the cause.`,
+        evidence: [
+          `${m.label} p95 ${num(m.now)}${m.unit} now vs ${num(m.was)}${m.unit} usual — ${m.ratio}x`,
+          `${v.name}'s own demand is within its normal range`,
+          `compared against ${v.against}`,
+        ],
+        action: 'Look at what else is running — the DIAG findings above name it if it is measurable.',
+        confidence: v.sessions >= 8 ? 'high' : 'medium',
+      });
+    } else if (v.call === 'job') {
+      add({
+        id: 'wl_job', sev: S.INFO,
+        title: `This run of ${v.name} is heavier than usual — the machine is fine`,
+        because: `${v.name} is asking for more than it normally does, while the machine behaves ` +
+                 `as it usually does when ${v.name} runs. Nothing here needs fixing on the ` +
+                 `computer; the work itself grew.`,
+        evidence: [
+          `${j.label} p95 ${num(j.now)}${j.unit} this run vs ${num(j.was)}${j.unit} usual — ${j.ratio}x`,
+          `machine contention is within its normal range for this program`,
+          `compared against ${v.against}`,
+        ],
+        action: 'Nothing to fix here. Worth knowing if you expected this run to be the same size as the last.',
+        confidence: v.sessions >= 8 ? 'high' : 'medium',
+      });
+    } else if (v.call === 'both') {
+      add({
+        id: 'wl_both', sev: S.WARN,
+        title: `A heavier run of ${v.name}, on a machine already under more pressure than usual`,
+        because: `Both moved, and they are separate problems with separate fixes — the run got ` +
+                 `bigger AND the machine is more contended than it normally is while ${v.name} ` +
+                 `runs. Treating this as one problem fixes at most half of it.`,
+        evidence: [
+          `${v.name}: ${j.label} p95 ${num(j.now)}${j.unit} vs ${num(j.was)}${j.unit} usual — ${j.ratio}x`,
+          `machine: ${m.label} p95 ${num(m.now)}${m.unit} vs ${num(m.was)}${m.unit} usual — ${m.ratio}x`,
+          `compared against ${v.against}`,
+        ],
+        action: 'Clear the machine-side pressure first — it is the half you can act on.',
+        confidence: v.sessions >= 8 ? 'high' : 'medium',
+      });
     }
   }
 

@@ -31,6 +31,17 @@ const FILES = [
   'collect/test-linux.js', 'collect/test-linux-live.js', 'collect/test-linux-stimulus.js',
   'collect/test-darwin.js', 'collect/test-darwin-sim.js', 'collect/test-darwin-live.js',
   'test-routes.js', 'test-actions-posix.js', 'test-inspect-posix.js',
+  // the self-verifying collector and its suite. Ships with the install for the same reason the
+  // collector suites do: it is how a machine nobody has seen proves its readings agree with a
+  // second, independent path into its own kernel.
+  'selfcheck.js', 'test-selfcheck.js', 'selfcheck-live.js',
+  // A2 + B1: the storage substrate that stores distributions rather than means, and the rewind
+  // layer that points the rule engine at the archive. Their suites ship for the same reason the
+  // collectors' do - they are how a machine nobody has seen proves the store round-trips.
+  'hist.js', 'test-hist.js', 'replay.js', 'test-replay.js', 'test-history.js',
+  // B5 + B6: per-workload percentiles, and the verdict that separates a heavy job from a
+  // degraded machine by holding the workload fixed and varying only the machine.
+  'workload.js', 'test-workload.js',
   // Windows host + one-shots
   'panel.ps1', 'launch.ps1', 'metrics.ps1', 'winagent.ps1', 'clipwatch.ps1', 'mftscan.ps1',
   'iotrace.ps1', 'clean-admin.ps1', 'space-admin.ps1', 'filetools.ps1', 'badge.ps1', 'shot.ps1',

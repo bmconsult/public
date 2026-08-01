@@ -1,6 +1,6 @@
 {
   "name": "vitals",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "A system monitor that measures the machine it runs on and explains what it finds.",
   "//": "NO DEPENDENCIES, deliberately. node_modules does not exist and nothing should create it - the whole product is standard-library Node plus per-platform collectors. This file exists to carry the version and the scripts, not to pull anything in.",

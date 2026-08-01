@@ -41,6 +41,7 @@ const KEYS = [
   'clip.history',
   'act.restartApp', 'act.clean', 'act.kill', 'act.elevate',
   'host.frameless', 'host.tray',
+  'self.verify',
 ];
 
 const PLATFORMS = {
@@ -64,6 +65,8 @@ const PLATFORMS = {
       'clip.history': true,
       'act.restartApp': true, 'act.clean': true, 'act.kill': true, 'act.elevate': true,
       'host.frameless': true, 'host.tray': true,
+      /* All three comparisons run and are independent here; observed agreeing on this machine. */
+      'self.verify': true,
     },
     notes: {
       'cpu.temps': 'Windows exposes no CPU temperature to unprivileged code. Present only when ' +
@@ -151,6 +154,10 @@ const PLATFORMS = {
          production usercaches target). Flip both when CI agrees. */
       'act.restartApp': false, 'act.clean': true, 'act.kill': true, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
+      /* Only the memory bound is independent here - libuv reads the same /proc/stat and
+         /proc/uptime the collector does, so two of the three comparisons are declared dependent
+         and not run. 'partial' is the honest word for a cross-check with one leg. */
+      'self.verify': 'partial',
     },
     notes: {
       'cpu.temps': '/sys/class/thermal and hwmon, when the platform driver publishes them. Bare ' +
@@ -218,6 +225,10 @@ const PLATFORMS = {
                      'cannot be written honestly from documentation.',
       'host.frameless': 'No WebView2 equivalent. The panel opens in the default browser in app mode; ' +
                         'edge-docking and always-on-top are the window manager\'s business, not ours.',
+      'self.verify': 'Runs, but with one leg: libuv reaches /proc/stat and /proc/uptime by the ' +
+        'same route the collector does, so the CPU and uptime comparisons cannot fail and are ' +
+        'declared dependent rather than counted. The memory bound is genuinely independent ' +
+        '(sysinfo(2) vs /proc/meminfo) and does run.',
       'host.tray': 'Only exists where a native host process draws it, and no Linux host has been ' +
                    'built - this build has no tray, by fact rather than by omission.',
     },
@@ -279,6 +290,10 @@ const PLATFORMS = {
       'clip.history': 'partial',
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
+      /* All three comparisons are independent on darwin by construction. Not yet OBSERVED
+         agreeing on real hardware, and this file's rule is that a flag means verified, not
+         implemented - so it stays false until a CI run publishes the agreement record. */
+      'self.verify': false,
     },
     notes: {
       'cpu.perCore': 'os.cpus() per-core tick counters, differenced between ticks like /proc/stat ' +
@@ -362,6 +377,9 @@ const PLATFORMS = {
                      'raises the password dialog, the user can refuse, and the elevated process ' +
                      'only ever runs clean-admin.js with a key from its own fixed table. ' +
                      'Unverified on hardware.',
+      'self.verify': 'The code paths are independent on darwin (vm_stat vs host_statistics64, ' +
+        'iostat vs host_processor_info) but no agreement record has been captured on real ' +
+        'hardware yet. Flagged false until CI publishes one.',
       'host.frameless': 'Opens in the default browser in app mode. A native WKWebView host is ' +
                         'possible but is a separate build with its own signing requirements.',
     },

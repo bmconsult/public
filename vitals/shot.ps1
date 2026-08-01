@@ -4,9 +4,24 @@
 # VITALS - capture the live panel window to a PNG.
 # Verification tool: reads the actual screen framebuffer at the window's rect.
 #
-# BitBlt from the SCREEN dc, not PrintWindow on the window dc. PrintWindow asks the app to redraw
-# itself into a bitmap, which returns black for GPU-composited surfaces like WebView2. Copying the
-# screen gets whatever is genuinely on it - the only honest check of what the user sees.
+# TWO WAYS TO CAPTURE, AND THE DEFAULT IS THE HONEST ONE.
+#
+# Screen copy (default): BitBlt from the SCREEN dc, so it gets whatever is genuinely on the glass -
+# including translucency, blur and anything composited over the window. That is what the user sees,
+# so it is what a verification tool should photograph.
+#
+# Its failure mode is the reason for the check below: it copies a RECTANGLE OF THE SCREEN, so if the
+# window is not actually on top, the capture is a perfectly sharp photograph of some other program.
+# SetForegroundWindow is not guaranteed - Windows refuses it from a background process - and this
+# script used to discard its return value and shoot anyway. Now it confirms the window really did
+# come forward and falls back rather than lying.
+#
+# PrintWindow (-Direct, and the automatic fallback): renders the window's own content, so occlusion
+# and focus stop mattering. The plain flag does return black for GPU-composited surfaces like
+# WebView2 - which is what the old comment here recorded - but PW_RENDERFULLCONTENT (flag 2, since
+# Windows 8.1) does not. Measured 2026-07-31: four clean captures of the live WebView2 panel while
+# it was fully occluded and never focused. It cannot show translucency over what is behind it, so
+# it is the fallback and not the default.
 #
 #   .\shot.ps1 -Out shots\topbar.png
 
@@ -18,7 +33,7 @@
 # not error - it returns a perfectly good capture of the wrong thing, which is the worst way for a
 # verification tool to fail.
 
-param([string]$Out = 'shot.png', [string]$Title = 'VITALS')
+param([string]$Out = 'shot.png', [string]$Title = 'VITALS', [switch]$Direct)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -33,6 +48,8 @@ using System;using System.Runtime.InteropServices;
 public static class S {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RC r);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct RC { public int L, T, R, B; }
 }
 "@
@@ -44,8 +61,15 @@ if (-not $p) {
   Write-Error ("no window titled '$Title'" + $(if ($seen) { " - VITALS windows open: $seen" } else { '' }))
   exit 1
 }
-[void][S]::SetForegroundWindow($p.MainWindowHandle)
-Start-Sleep -Milliseconds 600      # let it repaint on top
+$hwnd = $p.MainWindowHandle
+$onTop = $false
+if (-not $Direct) {
+  [void][S]::SetForegroundWindow($hwnd)
+  Start-Sleep -Milliseconds 600    # let it repaint on top
+  # ASK, DO NOT ASSUME. SetForegroundWindow's return value lies often enough that the only reliable
+  # test is whether the window IS the foreground one afterwards.
+  $onTop = ([S]::GetForegroundWindow() -eq $hwnd)
+}
 
 $r = New-Object S+RC
 [void][S]::GetWindowRect($p.MainWindowHandle, [ref]$r)
@@ -54,8 +78,18 @@ if ($w -le 0 -or $h -le 0) { Write-Error "bad rect ${w}x${h}"; exit 1 }
 
 $bmp = New-Object System.Drawing.Bitmap ([int]$w), ([int]$h)
 $g   = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size ([int]$w), ([int]$h)))
+if ($onTop) {
+  $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size ([int]$w), ([int]$h)))
+  $how = 'screen'
+} else {
+  # Either -Direct was asked for, or the window would not come forward. Render its own content
+  # rather than photographing whatever is sitting on top of it.
+  $hdc = $g.GetHdc()
+  [void][S]::PrintWindow($hwnd, $hdc, 2)      # PW_RENDERFULLCONTENT
+  $g.ReleaseHdc($hdc)
+  $how = if ($Direct) { 'direct' } else { 'direct (window would not come forward)' }
+}
 $g.Dispose()
 $bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
 $bmp.Dispose()
-"captured {0}x{1} at {2},{3} -> {4}" -f $w, $h, $r.L, $r.T, $Out
+"captured {0}x{1} at {2},{3} via {4} -> {5}" -f $w, $h, $r.L, $r.T, $how, $Out

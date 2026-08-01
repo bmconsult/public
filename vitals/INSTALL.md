@@ -1,6 +1,6 @@
 # Installing VITALS
 
-**Version 0.9.0.** Pre-1.0 on purpose: Windows is complete and measured, Linux is verified end to
+**Version 0.9.1.** Pre-1.0 on purpose: Windows is complete and measured, Linux is verified end to
 end, macOS runs green in CI on real Apple Silicon but still awaits a physical Mac for its battery,
 GPU and thermal paths (`FINISH_ON_A_MAC.md` is that process, one command), and the action layer
 (kill, clean, restart, dials) is Windows-only. Those four facts are what 1.0 would have to close.
@@ -43,14 +43,14 @@ There are no npm dependencies. `node_modules` does not exist and nothing will tr
 
 ### The short way: double-click Setup
 
-If you downloaded a **portable bundle** — `vitals-0.9.0-win-x64.zip`, `-mac-arm64.tar.gz`,
+If you downloaded a **portable bundle** — `vitals-0.9.1-win-x64.zip`, `-mac-arm64.tar.gz`,
 `-linux-x64.tar.gz` and so on — the Node runtime is already inside it. Nothing needs installing
 first, on any platform.
 
 | Platform | Unpack | Then |
 |---|---|---|
 | **Windows** | Right-click the .zip → Extract All | Double-click **`Setup.cmd`** |
-| **macOS / Linux** | `tar -xzf vitals-0.9.0-<target>.tar.gz` | `cd` in and run **`./setup.sh`** |
+| **macOS / Linux** | `tar -xzf vitals-0.9.1-<target>.tar.gz` | `cd` in and run **`./setup.sh`** |
 
 Setup verifies every file it shipped with, finds the runtime, probes what this platform can measure,
 then takes a real reading of your machine and shows it to you. There is no progress bar estimating
@@ -241,7 +241,7 @@ needs nothing installed at all.
 
 ## Testing a collector
 
-Six suites, and it matters which is which — they prove different amounts.
+Twelve suites, and it matters which is which — they prove different amounts.
 
 | Command | Runs on | What a pass actually means |
 |---|---|---|
@@ -251,6 +251,12 @@ Six suites, and it matters which is which — they prove different amounts.
 | `node collect/test-darwin.js` | any platform | Two parsers against synthetic fixtures. **Not verification.** |
 | `node collect/test-darwin-sim.js` | any platform | Drives the **whole** macOS collector from fixtures through an injection seam — 64 checks covering the memory maths, `ps` aggregation, `netstat` dedup, battery conversion, rate differencing, null discipline. Proves the **logic**, not the format assumption. |
 | `node collect/test-darwin-live.js` | macOS only | The real thing. Cross-checks against `sysctl`, `df`, `pmset`, and tells you what to confirm by eye in Activity Monitor. |
+| `node test-selfcheck.js` | any platform | The self-check's own arithmetic: independence gating, the bound invariant, median verdicts, the refusal to judge too early. Uses stubs — it would pass on a kernel where the two "independent" sources are secretly the same file. **Not verification.** |
+| `node selfcheck-live.js` | any platform | Runs the real collector against the real second source and prints the agreement record. **This is the verification**, and it is what `self.verify` in `collect/caps.js` is flagged from. |
+| `node test-hist.js` | any platform | The histogram substrate. Measures the realised quantile error against raw samples on every distribution shape these metrics take, and asserts it against the 2% the module claims. A bound that is asserted rather than measured is not a bound. |
+| `node test-history.js` | any platform | Rollups round-trip through the disk with distributions intact; rows from earlier builds are still read; both formats coexist inside one query window; compaction verifies an archive **before** removing its source. |
+| `node test-replay.js` | any platform | REWIND. The engine runs at a past moment, reports what the archive could not answer, and refuses to fabricate a correlation the store never recorded. |
+| `node test-workload.js` | any platform | Per-program percentiles, and the B6 separation: it builds a heavy-job scenario and a degraded-machine scenario that are **identical from any machine-wide average**, and asserts they get opposite verdicts. |
 
 ### Why simulated tests still earn their keep
 
@@ -267,6 +273,22 @@ assumption is wrong. Three real bugs came out of them:
    whole line, matched the `/dev` exclusion, and **silently dropped the main disk.**
 
 A test that cannot verify can still falsify. That third one would have shipped.
+
+### Checking the collector against itself, on any machine
+
+```bash
+node selfcheck-live.js --samples 16
+```
+
+This is the one to run on a machine nobody has seen. It reads a second, **independent** path into
+the kernel — `os.freemem()` reaches `GlobalMemoryStatusEx` / `sysinfo(2)` / `host_statistics64`, a
+different route from the one the collector takes — and reports how closely the two agree. It exits
+nonzero if any comparison disagrees **or** if too few samples arrived to say anything, because "we
+could not check" and "we checked and it was fine" are different results.
+
+On Linux it will tell you two of the three comparisons are **not run**: libuv reads the same
+`/proc/stat` and `/proc/uptime` the collector does, so those comparisons could not fail. That is
+reported rather than counted — a check that cannot fail manufactures confidence.
 
 ### If you have a Mac
 

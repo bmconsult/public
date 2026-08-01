@@ -1071,7 +1071,9 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
 .sfx-hero{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
 /* The process anatomy is the hero's growable part: the medium's constellation gains rows as Chromium
    spawns them. It scrolls so the sparkline row below it stays anchored to the page bottom. */
-#sfAnat{min-height:0;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+/* A FLOOR, not zero. min-height:0 let it be squeezed out of existence entirely by whatever sat
+   below it - a table that shows nothing is worse than a table that shows two rows and scrolls. */
+#sfAnat{min-height:104px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
 .sfx-leg{font-size:9px;letter-spacing:.06em;color:var(--ink-3);margin-top:7px;padding:0 8px;opacity:.85}
 .sfx-say{font-family:var(--disp);font-weight:200;font-size:54px;line-height:1;letter-spacing:-.03em;color:var(--ink);font-variant-numeric:tabular-nums;text-shadow:var(--disp-sh)}
 .sfx-say small{font-size:16px;color:var(--ink-3);font-weight:400;letter-spacing:.02em;margin:0 20px 0 7px}
@@ -1093,7 +1095,179 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
 .sfr .cvv{font-family:var(--disp);font-size:15px;font-weight:350;color:var(--ink);width:78px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
 .sfr .cvv small,.sfr .mvv small{font-size:9px;color:var(--ink-3);margin-left:2px}
 .sfr .mvv{font-size:12px;color:var(--ink-2);width:86px;text-align:right;font-variant-numeric:tabular-nums;flex:none}
+/* THE AGREEMENT RECORD. Three cards on one row, sized so all three fit without scrolling — the
+   whole point is that a reader can see which comparisons ran AND which did not, and a region that
+   shows one of three answers the first question while hiding the second. `flex:none` keeps it out
+   of the growth fight with #sfAnat above it; the dead space it occupies was there already. */
+/* SHRINKABLE, NOT FIXED. `flex:none` here was wrong and the narrow window proved it: this block
+   took its full height out of a column whose other children carry min-height:0, so #sfAnat - the
+   page's actual subject - collapsed to nothing and the cards ran over the footer. It now yields
+   like everything else and scrolls internally when the window cannot hold it. */
+.sfx-chk{flex:0 1 auto;min-height:0;margin-top:16px;display:flex;flex-direction:column}
+.sfx-chk-h{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700;
+  margin:0 0 9px;display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.sfx-chk-h span{letter-spacing:.06em;font-weight:400;text-transform:none;opacity:.8}
+/* auto-fit, not a hard 3: at 1120px this is three across, and on a narrow panel it folds to two
+   and then one rather than rendering three 70px columns of one word per line. */
+.sfx-chk-g{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;
+  min-height:0;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+.sfx-chk-g::-webkit-scrollbar{width:0;height:0}
+/* One card per comparison. min-width:0 on the grid child is what lets the long API names wrap
+   instead of forcing the track wider than its share — without it three cards silently become a
+   horizontal overflow on a narrow window. */
+.sfc{min-width:0;border:1px solid var(--line-2);border-radius:9px;padding:10px 12px;background:var(--gl-1)}
+.sfc b{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:3px}
+.sfc .sfc-n{font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums;line-height:1.45}
+.sfc .sfc-m{display:block;font-size:9.5px;color:var(--ink-3);line-height:1.4;margin-top:5px;
+  overflow-wrap:anywhere}
+.sfc.off{opacity:.72}
+
+/* ---------- B5 + B6: WORKLOADS ----------
+   What each program costs, in percentiles rather than an average, and whether this run differs
+   from that program's own past. The layout is a list and a detail: the list answers "what is
+   expensive", the detail answers "and is that unusual", and those are different questions that
+   want different amounts of room. */
+.wlx{display:flex;flex-direction:column;height:100%;min-height:0}
+.wlx-meta{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.wlx-main{display:flex;gap:30px;align-items:stretch;margin-top:14px;flex:1;min-height:0}
+.wlx-left{flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0}
+.wlx-right{width:360px;flex:none;border-left:1px solid var(--line-2);padding-left:22px;
+  display:flex;flex-direction:column;min-height:0}
+
+.wlx-hd{display:grid;grid-template-columns:minmax(0,1fr) 150px 58px 58px 58px 74px 62px;gap:8px;font-size:9px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:700;
+  padding:0 8px 7px;border-bottom:1px solid var(--line-2)}
+.wlx-hd i{font-style:normal;text-align:right}
+.wlx-scr{flex:1 1 0;min-height:60px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;
+  overscroll-behavior:contain}
+.wlx-scr::-webkit-scrollbar{width:0;height:0}
+.wlr{display:grid;grid-template-columns:minmax(0,1fr) 150px 58px 58px 58px 74px 62px;gap:8px;
+  align-items:center;padding:9px 8px;border-bottom:1px solid var(--line-2);cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.wlr:hover{background:var(--gl-1)}
+.wlr.on{background:rgba(var(--acc2),.09)}
+.wlr b{font-weight:600;font-size:12.5px;color:var(--ink);display:flex;align-items:center;gap:7px;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wlr b em{font-style:normal;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ok);border:1px solid currentColor;border-radius:3px;padding:0 3px;flex:none}
+.wlr i{font-style:normal;text-align:right;font-size:12px;color:var(--ink-2)}
+.wlr i.dim{color:var(--ink-3)}
+/* p99 is the column that earns its place: a program can be calm at p95 and unusable at p99, which
+   is precisely the "it stutters" complaint, so it is given the emphasis rather than hidden. */
+.wlr i.p99{color:var(--ink)}
+/* THE SPREAD BAR: p50 to p95 as a filled span, p99 as a tick beyond it, all on one shared scale.
+   It is the whole argument for this page in one mark - two programs with the same average look
+   identical in every column of numbers and completely different here. Shared scale, not per-row:
+   a bar normalised to its own maximum would make the quietest process look exactly as dramatic as
+   the loudest, which is the opposite of the point. */
+.wlsp{position:relative;height:7px;border-radius:4px;background:rgba(var(--acc2),.10);overflow:hidden}
+.wlsp u{position:absolute;top:0;bottom:0;background:var(--cpu);opacity:.55;border-radius:4px}
+.wlsp b{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--cpu);border-radius:1px}
+.wlr .vc{font-size:9px;letter-spacing:.1em;text-transform:uppercase;text-align:right;font-weight:700}
+.vc.job{color:var(--warn)} .vc.machine{color:var(--crit)} .vc.both{color:var(--crit)}
+.vc.normal{color:var(--ink-3)} .vc.none{color:var(--ink-3);opacity:.55}
+
+.wld-name{font-family:var(--disp);font-weight:200;font-size:27px;line-height:1.1;color:var(--ink);
+  letter-spacing:-.01em}
+.wld-sub{font-size:10.5px;color:var(--ink-3);margin-top:3px;font-variant-numeric:tabular-nums}
+.wld-say{margin-top:12px;font-size:12.5px;line-height:1.55;color:var(--ink-2);flex:none}
+.wld-say b{color:var(--ink);font-weight:600;display:block;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;margin-bottom:5px}
+.wld-say.job b{color:var(--warn)} .wld-say.machine b,.wld-say.both b{color:var(--crit)}
+.wld-tbl{margin-top:14px;flex:1 1 0;min-height:0;overflow-y:auto;scrollbar-width:none;
+  -ms-overflow-style:none;overscroll-behavior:contain}
+.wld-tbl::-webkit-scrollbar{width:0;height:0}
+.wld-grp{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:700;margin:11px 0 6px}
+.wld-row{display:grid;grid-template-columns:1fr 66px 66px 52px;gap:7px;align-items:baseline;
+  padding:4px 0;font-size:11.5px;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--line-2)}
+.wld-row span{color:var(--ink-3)}
+.wld-row i{font-style:normal;text-align:right;color:var(--ink-2)}
+.wld-row u{text-decoration:none;text-align:right;font-size:10.5px;color:var(--ink-3)}
+.wld-row u.up{color:var(--warn)} .wld-row u.dn{color:var(--ok)}
+.wlx-foot{margin-top:10px;flex:none;font-size:10px;color:var(--ink-3);line-height:1.5}
+@media (max-width:1150px){ .wlx-right{width:300px} }
+@media (max-height:700px){ .wld-name{font-size:21px} .wlx-foot{display:none} }
+
+/* ---------- B1: REWIND ----------
+   A whole quarter of history on one screen, because the axis is logarithmic in AGE rather than
+   linear in time: the last ten minutes get as much width as the last ten weeks. That matches how
+   the question is actually asked ("it was fine this morning and awful an hour ago"), and it is why
+   there is no scrollbar here - zooming became scrolling, so neither is needed. */
+.rwx{display:flex;flex-direction:column;height:100%;min-height:0}
+.rwx-meta{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.rwx-main{display:flex;gap:34px;align-items:stretch;margin-top:14px;flex:1;min-height:0}
+.rwx-hero{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.rwx-when{font-family:var(--disp);font-weight:200;font-size:40px;line-height:1.05;letter-spacing:-.02em;
+  color:var(--ink);font-variant-numeric:tabular-nums;text-shadow:var(--disp-sh)}
+.rwx-when small{font-size:14px;color:var(--ink-3);font-weight:400;letter-spacing:.02em;margin-left:12px}
+.rwx-say{margin-top:9px;font-size:14.5px;color:var(--ink);max-width:640px;line-height:1.5;min-height:44px}
+.rwx-say em{font-style:normal;color:var(--vc);font-weight:700;font-size:10px;letter-spacing:.18em;
+  text-transform:uppercase;margin-right:9px}
+.rwx-ctx{margin-top:4px;font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+
+/* The band. Fixed height, never a growth participant - it is an instrument, and an instrument that
+   changes size when the text beside it changes length is a different instrument each time. */
+/* THE BAND GROWS INTO THE COLUMN. It is the instrument and the subject of the page; the first cut
+   pinned it at 150px and left ~400px of dead space below the metric buttons on a full-size window -
+   "fit by trimming" in reverse, spending the screen on nothing. min-height on both so a short
+   window shrinks it rather than overflowing the frame. */
+.rwx-band{position:relative;margin-top:14px;flex:1 1 auto;min-height:150px;display:flex;
+  flex-direction:column;border:1px solid var(--line-2);border-radius:10px;
+  background:var(--gl-1);padding:10px 12px 6px;cursor:crosshair;user-select:none;touch-action:none}
+.rwx-band canvas{display:block;width:100%;flex:1 1 auto;min-height:96px}
+.rwx-axis{position:relative;height:14px;font-size:9px;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;margin-top:5px;letter-spacing:.04em}
+.rwx-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:7px}
+.rwx-head b{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+.rwx-head span{font-size:10px;color:var(--ink-3)}
+.rwx-keys{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;flex:none}
+.rwx-keys button{font:inherit;font-size:10.5px;letter-spacing:.04em;color:var(--ink-2);cursor:pointer;
+  background:var(--gl-1);border:1px solid var(--line-2);border-radius:999px;padding:4px 11px}
+.rwx-keys button.on{color:var(--ink);border-color:rgb(var(--acc));background:rgba(var(--acc),.10)}
+.rwx-hint{margin-top:12px;flex:none;font-size:10px;color:var(--ink-3);line-height:1.5}
+
+.rwx-rail{width:330px;flex:none;border-left:1px solid var(--line-2);padding:2px 0 2px 22px;
+  align-self:stretch;display:flex;flex-direction:column;gap:9px;min-height:0}
+.rwx-rail>.rl{flex:none;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:700;margin:0 0 2px}
+.rwx-scr{flex:1 1 0;min-height:52px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;
+  overscroll-behavior:contain}
+.rwx-scr::-webkit-scrollbar{width:0;height:0}
+.rwf{border-left:2px solid var(--line-2);padding:0 0 0 10px;margin-bottom:11px}
+.rwf b{display:block;font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.4}
+.rwf span{display:block;font-size:10.5px;color:var(--ink-3);line-height:1.45;margin-top:2px}
+.rwf.crit{border-left-color:var(--crit)}
+.rwf.warn{border-left-color:var(--warn)}
+/* What the record could not answer. Deliberately not styled as an error: it is not a fault, it is
+   the shape of the archive, and dressing it as a warning would teach people to dismiss it. */
+.rwu{font-size:10.5px;color:var(--ink-3);line-height:1.45;margin-bottom:9px;padding-left:10px;
+  border-left:1px dashed var(--line-2)}
+.rwu b{color:var(--ink-2);font-weight:600;display:block;font-size:11px}
+
+@media (max-height:700px){
+  .rwx-band{min-height:104px}
+  .rwx-band canvas{min-height:70px}
+  .rwx-when{font-size:30px}
+  .rwx-hint{display:none}      /* the instrument outranks its own footnote when space is short */
+}
 .sfx-sprow{display:flex;align-items:flex-end;gap:16px;margin-top:auto;padding-top:14px}
+/* SHORT WINDOWS: STOP PINNING, START SCROLLING.
+   The hero's normal geometry pins the sparkline to the bottom and lets the two regions above it
+   flex - which is right while there is enough height to give each a usable share. Below about
+   760px there is not: the anatomy hit its floor, the agreement cards got 30px, and a 30px scroll
+   region is not a bounded region, it is a truncation wearing one's clothes.
+   So under that height the column stops competing with itself. Every child sizes to its content
+   and the hero becomes one wheel-scroll region - the same pattern the rest of the app uses, and
+   the reason each child gets overflow:visible here rather than keeping its own scroller: nested
+   scrollers on one axis are how a wheel event ends up moving the wrong thing. */
+@media (max-height:760px){
+  .sfx-hero{overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+  .sfx-hero::-webkit-scrollbar{width:0;height:0}
+  #sfAnat{overflow:visible;min-height:auto}
+  .sfx-chk-g{overflow:visible}
+  .sfx-sprow{margin-top:18px}
+}
 .sfx-sprow canvas{flex:1;min-width:0;height:46px}
 .sfx-sprow span{flex:none;max-width:300px}
 .sfx-sprow span{font-size:10px;color:var(--ink-3);line-height:1.5;padding-bottom:2px}
@@ -1529,6 +1703,8 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
     <div class="rb" data-go="therm"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg><span class="tip">Thermals</span></div>
     <div class="rb" data-go="diag"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9.5 20h5M10 22h4"/></svg><span class="tip">Diagnose</span><i class="badge" id="diagBadge"></i></div>
     <div class="rb" data-go="led"><svg viewBox="0 0 24 24"><path d="M6 3h10.5L19 5.5V21H6z"/><path d="M9 8h6.5M9 11.5h6.5M9 15h4M9 18h2.5"/></svg><span class="tip">Outcomes</span></div>
+    <div class="rb" data-go="wl"><svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M6 16V9M11 16V5M16 16v-4M21 16v-7"/></svg><span class="tip">Workloads</span></div>
+    <div class="rb" data-go="rew"><svg viewBox="0 0 24 24"><path d="M11 6L4 12l7 6V6z"/><path d="M20 6l-7 6 7 6V6z"/></svg><span class="tip">Rewind</span></div>
     <div class="rb" data-go="growth"><svg viewBox="0 0 24 24"><path d="M3 17l5.5-5.5 3.5 3.5L21 6"/><path d="M15 6h6v6"/></svg><span class="tip">Growth</span></div>
     <div class="rb" data-go="boot"><svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span class="tip">Startup</span></div>
     <div class="rb" data-go="clean"><svg viewBox="0 0 24 24"><path d="M3 7h18M8 7V4h8v3M6 7l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg><span class="tip">Reclaim</span></div>
@@ -1586,6 +1762,8 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
       <div class="page" id="p-therm"></div>
       <div class="page" id="p-diag"></div>
       <div class="page" id="p-led"></div>
+      <div class="page" id="p-wl"></div>
+      <div class="page" id="p-rew"></div>
       <div class="page" id="p-growth"></div>
       <div class="page" id="p-boot"></div>
       <div class="page" id="p-clean"></div>
@@ -2313,6 +2491,27 @@ function go(v){
   if(RENDER[v]) RENDER[v]();
 }
 $$('.rb[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
+
+/* DEEP LINK. `?page=footprint` (or `#footprint`) opens straight onto a page instead of OVERVIEW.
+   Two uses: a second window can be pinned to one page beside the first, and a capture or a bug
+   report can name the exact view it is talking about rather than "click through to it". Validated
+   against the rail rather than trusted - an unknown name falls through to the default, so a stale
+   link opens the panel rather than a blank frame. */
+setTimeout(function deepLink(){
+  /* Deferred one turn on purpose: RENDER is declared above but FILLED IN below, so calling go()
+     inline would switch the page and then skip its renderer, leaving a correct-looking blank until
+     the next tick happened to repaint it. */
+  let want='';
+  try{ want=(new URLSearchParams(location.search).get('page')||location.hash.slice(1)||'').toLowerCase(); }catch{}
+  if(!want) return;
+  /* Match the internal name OR the label on the rail. The internal names are short and not always
+     the word on screen - FOOTPRINT is `self` - and `?page=self` in a bug report tells the reader
+     nothing. Accepting what they can actually see costs one lookup. */
+  let btn=$(`.rb[data-go="${CSS.escape(want)}"]`);
+  if(!btn) btn=$$('.rb[data-go]').find(b=>b.textContent.trim().toLowerCase()===want);
+  if(!btn) return;
+  go(btn.dataset.go);
+}, 0);
 /* IS THE USER TYPING? Bare-letter shortcuts are lovely until there is somewhere to type, and this
    page grew a chat box. Typing "for" in the Ask input used to fire f→FOOTPRINT then r→RIG, so the
    page changed underneath the sentence being written. Any editable target means the keystroke
@@ -4763,6 +4962,13 @@ function connect(){
          the host's real capabilities land, rebuild once so anything it cannot measure disappears
          rather than sitting there forever waiting for a number that will never come. */
       if(first&&S.caps.missing&&S.caps.missing.length){ try{ buildTiles(); buildCompact(); }catch{} }
+      /* FOOTPRINT paints its capability panels once, when the page is built. That was fine while the
+         only way onto the page was clicking the rail seconds after boot, by which time this event
+         had long arrived. The `?page=` deep link builds it immediately - ahead of this - and the
+         panel sat on "waiting for the host description…" forever. Repaint here: the data arriving
+         is the event, and a page that renders once against data it raced is a page that renders
+         wrong exactly when someone linked straight to it. */
+      if(S.view==='self'){ try{ paintCaps(); paintMode(); }catch{} }
     }
     $('#mach').textContent=S.static.host;
     $('#osl').textContent=S.static.os||'';
@@ -4822,7 +5028,12 @@ function connect(){
     else if(S.view==='ov') paintTiles();
     else if(['cpu','mem','net','therm'].includes(S.view)) RENDER[S.view]&&RENDER[S.view]();
     else if(S.view==='sys'){ paintSysHead(t); paintSysRaw(); }
-    else if(S.view==='self'){ try{ paintSelf(t); }catch{} }
+    else if(S.view==='self'){ try{ paintSelf(t); }catch{}
+      /* And re-read the agreement record now and then. It only changes on the check's duty cycle,
+         so polling it every tick would be a fetch per second for a number that moves once a minute
+         - but painting it once on entry means someone who leaves the page open watches a frozen
+         verdict, which for a panel whose whole subject is staleness would be a poor joke. */
+      if((S.selfChkTick=(S.selfChkTick||0)+1)%15===0){ try{ paintSelfCheck(); }catch{} } }
     else if(S.view==='rig'){ try{ paintRig(t); }catch{} }
     else if(S.view==='ctl'){ try{ paintCtlLive(t); }catch{} }
   });
@@ -5229,6 +5440,450 @@ function paintSelf(t){
     return `<div class="sfm"><b>${MODE_LABEL[k]}</b>${r.ema.toFixed(1)}% · ${fmt(r.emam)} MB<span>${mins<1?Math.round(r.secs)+' s':mins.toFixed(1)+' min'} watched</span></div>`;
   }).join('');
 }
+
+
+/* ================= B5 + B6: WORKLOADS =================
+ * B5 - what each program costs, as percentiles. A mean hides the complaint: a build averaging 40%
+ * with a p95 of 45% and one averaging 40% with a p95 of 98% are different experiences, and only the
+ * second is what anyone calls "stuttering".
+ *
+ * B6 - is it the machine, or is it the job? Two findings with opposite fixes that every tool in
+ * this category conflates, because from a machine-wide average they look identical. Telling them
+ * apart needs the comparison to hold the workload FIXED and vary only the machine, which is why
+ * each session records both what the program cost and what the machine was like while it ran. */
+const WL = { sel: null, data: null };
+
+const wlNum = (v) => v == null ? '—' : (v >= 100 ? String(Math.round(v)) : (+v).toFixed(1));
+
+RENDER.wl = async () => {
+  const el = $('#p-wl');
+  if (!el.dataset.built) {
+    el.dataset.built = '1';
+    el.innerHTML =
+      '<div class="wlx">'
+      + '<div class="wlx-meta">workloads · what each program costs, and whether this run is unusual for it</div>'
+      + '<div class="wlx-main">'
+        + '<div class="wlx-left">'
+          + '<div class="wlx-hd"><span>program</span><span style="text-align:left">cpu spread · p50 to p95, tick at p99</span><i>p50</i><i>p95</i><i>p99</i><i>memory p95</i><i>verdict</i></div>'
+          + '<div class="wlx-scr" id="wlList"></div>'
+          + '<div class="wlx-foot" id="wlNote"></div>'
+        + '</div>'
+        + '<div class="wlx-right" id="wlDetail"></div>'
+      + '</div>'
+    + '</div>';
+  }
+  await wlLoad();
+};
+
+async function wlLoad() {
+  let d;
+  try { d = await (await fetch(API('/api/workloads'))).json(); } catch { return; }
+  WL.data = d;
+  const list = d.workloads || [];
+  if (!list.length) {
+    $('#wlList').innerHTML = '<div class="wld-say">Nothing observed yet. Programs appear here once they have been in the top of the process list for about half a minute.</div>';
+    $('#wlDetail').innerHTML = '';
+    return;
+  }
+  if (!WL.sel || !list.some((w) => w.name === WL.sel)) WL.sel = list[0].name;
+
+  /* One scale across every row, taken from the loudest p99 actually present. Fixing it at 100
+      would flatten every row on an idle machine into an invisible sliver; taking it from the data
+      keeps the comparison between rows, which is the only comparison this column is for. */
+  const scale = Math.max(1, ...list.map(function (w) {
+    return w.current.self.cpu ? w.current.self.cpu.p99 : 0;
+  }));
+
+  $('#wlList').innerHTML = list.map(function (w) {
+    const c = w.current.self.cpu, m = w.current.self.mb;
+    const v = w.verdict;
+    const pc = function (x) { return Math.max(0, Math.min(100, (x / scale) * 100)); };
+    const bar = c
+      ? '<div class="wlsp">'
+          + '<u style="left:' + pc(c.p50).toFixed(1) + '%;width:'
+            + Math.max(1.5, pc(c.p95) - pc(c.p50)).toFixed(1) + '%"></u>'
+          + '<b style="left:' + pc(c.p99).toFixed(1) + '%"></b>'
+        + '</div>'
+      : '<span></span>';
+    const cls = v && v.ok ? v.call : 'none';
+    const txt = v && v.ok ? (v.call === 'normal' ? 'usual' : v.call)
+      : (v && /past session/.test(v.reason || '') ? 'learning' : '—');
+    return '<div class="wlr' + (w.name === WL.sel ? ' on' : '') + '" data-n="' + sysEsc(w.name) + '">'
+      + '<b>' + sysEsc(w.name) + (w.live ? '<em>live</em>' : '') + '</b>'
+      + bar
+      + '<i class="dim">' + (c ? wlNum(c.p50) : '—') + '</i>'
+      + '<i>' + (c ? wlNum(c.p95) : '—') + '</i>'
+      + '<i class="p99">' + (c ? wlNum(c.p99) : '—') + '</i>'
+      + '<i>' + (m ? Math.round(m.p95) + ' MB' : '—') + '</i>'
+      + '<span class="vc ' + cls + '">' + txt + '</span>'
+      + '</div>';
+  }).join('');
+  $$('#wlList .wlr').forEach(function (r) {
+    r.onclick = function () { WL.sel = r.dataset.n; wlLoad(); };
+  });
+
+  /* The sampling caveat is printed, not buried in a doc. Everything on this page comes from a
+     top-16-by-memory list, so a program that never enters it has no record at all — and a reader
+     who does not know that will read an absence as a zero. */
+  const live = list.filter(function (w) { return w.live; }).length;
+  $('#wlNote').textContent = list.length + ' programs observed · ' + live + ' running now · '
+    + (d.note || '');
+
+  wlDetail(list.find(function (w) { return w.name === WL.sel; }));
+}
+
+function wlDetail(w) {
+  if (!w) { $('#wlDetail').innerHTML = ''; return; }
+  const v = w.verdict;
+  const cur = w.current, base = w.baseline;
+
+  /* Current against baseline, per measure. The ratio is the thing worth reading, so it is given a
+     column of its own rather than left for the reader to divide in their head. */
+  const rows = function (group, title) {
+    const keys = Object.keys(cur[group] || {});
+    if (!keys.length) return '';
+    return '<div class="wld-grp">' + title + '</div>'
+      + keys.map(function (k) {
+        const a = cur[group][k], b = base && base[group] ? base[group][k] : null;
+        let ratio = '', cls = '';
+        if (b && b.p95 > 0 && a.p95 != null) {
+          const r = a.p95 / b.p95;
+          ratio = r.toFixed(2) + '\u00d7';
+          if (r >= 1.35) cls = 'up'; else if (r <= 0.74) cls = 'dn';
+        }
+        return '<div class="wld-row"><span>' + sysEsc(a.label) + '</span>'
+          + '<i>' + wlNum(a.p95) + sysEsc(a.unit) + '</i>'
+          + '<i>' + (b ? wlNum(b.p95) + sysEsc(b.unit) : '—') + '</i>'
+          + '<u class="' + cls + '">' + ratio + '</u></div>';
+      }).join('');
+  };
+
+  const head = '<div class="wld-name">' + sysEsc(w.name) + '</div>'
+    + '<div class="wld-sub">'
+      + (w.live ? 'running now · ' : 'last seen · ')
+      + cur.minutes + ' min this session · ' + cur.samples + ' samples'
+      + (base ? ' · baseline ' + base.sessions + ' past sessions, ' + base.minutes + ' min' : ' · no baseline yet')
+    + '</div>';
+
+  /* THE VERDICT, or an honest account of why there is not one. A verdict from one prior run
+     distinguishes nothing while sounding exactly as confident as one from twenty, so the refusal
+     is shown with the same prominence the answer would get. */
+  const say = v && v.ok
+    ? '<div class="wld-say ' + v.call + '"><b>'
+        + (v.call === 'job' ? 'the job, not the machine'
+         : v.call === 'machine' ? 'the machine, not the job'
+         : v.call === 'both' ? 'both, and they need different fixes'
+         : 'behaving as usual')
+      + '</b>' + sysEsc(v.says) + '</div>'
+    : '<div class="wld-say"><b>not enough history to judge</b>'
+      + sysEsc((v && v.reason) || 'no record yet') + '. Until then the numbers below are still real — '
+      + 'there is simply nothing to compare them against.</div>';
+
+  const legend = base
+    ? '<div class="wld-row" style="border:0;padding-top:9px"><span style="font-size:9px;letter-spacing:.14em;text-transform:uppercase">measure</span>'
+      + '<i style="font-size:9px;letter-spacing:.1em;text-transform:uppercase">this run p95</i>'
+      + '<i style="font-size:9px;letter-spacing:.1em;text-transform:uppercase">usual p95</i>'
+      + '<u style="font-size:9px;letter-spacing:.1em;text-transform:uppercase">ratio</u></div>'
+    : '';
+
+  $('#wlDetail').innerHTML = head + say
+    + '<div class="wld-tbl">' + legend
+    + rows('self', 'what ' + sysEsc(w.name) + ' asked for')
+    + rows('env', 'what the machine was like while it ran')
+    + '</div>';
+}
+
+/* ================= B1: REWIND — the diagnosis at a past moment =================
+ * "Why was my computer slow yesterday at 2pm?"
+ *
+ * Nothing else on this machine answers that. Reliability Monitor shows crashes, not pressure;
+ * perfmon is sixty seconds of NOW and says outright that it cannot detect historical patterns; WPA
+ * records everything and needs you to have started the trace before the problem. VITALS already
+ * kept the record — this points the same rule engine at it, with no second copy of the logic.
+ *
+ * The axis is LOGARITHMIC IN AGE, which is the whole interaction: thirty seconds ago and ninety
+ * days ago sit on one screen, with the recent past given the width it deserves. Zooming became
+ * scrolling, so there is neither. */
+const RW = { key: 'cpu', at: null, band: null, busy: false, want: null, hoverX: null };
+/* key, label, unit, COLOUR TOKEN.
+   The colour is named per metric so a band matches that metric everywhere else on the panel - and
+   the token is a HEX one, applied with globalAlpha rather than interpolated into an rgba() string.
+   That distinction is not cosmetic. This project spells colours two ways: hex for direct use, and
+   an R,G,B triple twin for alpha variants. `rgba(#5e6c85,.13)` is not a colour, and canvas does
+   not throw on an invalid fillStyle - it silently keeps the previous one, which is black. The
+   first cut of this chart painted solid black rectangles over a third of the record for exactly
+   that reason, and it took a screenshot to see it. */
+const RW_KEYS = [
+  ['cpu', 'CPU', '%', '--cpu'], ['mem', 'Memory', '%', '--mem'], ['diskPct', 'Disk used', '%', '--disk'],
+  ['diskQueue', 'Disk queue', '', '--disk'], ['hardFaults', 'Hard faults', '/s', '--mem'],
+  ['gpu', 'GPU', '%', '--gpu'],
+];
+
+function rwAgeLabel(sec){
+  if(sec<90) return Math.round(sec)+'s';
+  if(sec<5400) return Math.round(sec/60)+'m';
+  if(sec<172800) return (sec/3600).toFixed(sec<36000?1:0)+'h';
+  return (sec/86400).toFixed(sec<1209600?1:0)+'d';
+}
+
+RENDER.rew=async()=>{
+  const el=$('#p-rew');
+  if(!el.dataset.built){
+    el.dataset.built='1';
+    el.innerHTML='<div class="rwx">'
+      +'<div class="rwx-meta">rewind · the diagnosis as it would have read at any past moment</div>'
+      +'<div class="rwx-main">'
+        +'<div class="rwx-hero">'
+          +'<div class="rwx-when" id="rwWhen">–</div>'
+          +'<div class="rwx-say" id="rwSay"><em>·</em>drag along the band to choose a moment.</div>'
+          +'<div class="rwx-ctx" id="rwCtx"></div>'
+          +'<div class="rwx-band" id="rwBand">'
+            +'<div class="rwx-head"><b id="rwBandLab">cpu</b><span id="rwBandNote"></span></div>'
+            +'<canvas id="rwCanvas"></canvas>'
+            +'<div class="rwx-axis" id="rwAxis"></div>'
+          +'</div>'
+          +'<div class="rwx-keys" id="rwKeys"></div>'
+          +'<div class="rwx-hint">The axis is logarithmic in age — the last ten minutes get as much width as the last ten weeks, so a quarter of history fits one screen without scrolling. Shaded columns hold a record with no distribution: written before the store kept them, so “did this hold, or did it merely peak?” cannot be asked of that moment. Gaps are gaps — the machine was off, and nothing is drawn through them.</div>'
+        +'</div>'
+        +'<div class="rwx-rail">'
+          +'<div class="rl">what was wrong then</div>'
+          +'<div class="rwx-scr" id="rwFind"></div>'
+          +'<div class="rl">what the record cannot answer</div>'
+          +'<div class="rwx-scr" id="rwUn"></div>'
+        +'</div>'
+      +'</div>'
+    +'</div>';
+    $('#rwKeys').innerHTML=RW_KEYS.map(function(k){
+      return '<button data-k="'+k[0]+'"'+(k[0]===RW.key?' class="on"':'')+'>'+k[1]+'</button>';
+    }).join('');
+    $$('#rwKeys button').forEach(function(b){ b.onclick=function(){ RW.key=b.dataset.k; rwLoadBand(); }; });
+
+    const band=$('#rwBand');
+    const pick=function(ev){
+      const cv=$('#rwCanvas').getBoundingClientRect();
+      rwSeek(Math.max(0,Math.min(1,(ev.clientX-cv.left)/Math.max(1,cv.width))));
+    };
+    let down=false;
+    band.addEventListener('pointerdown',function(e){ down=true; try{band.setPointerCapture(e.pointerId);}catch{} pick(e); });
+    band.addEventListener('pointermove',function(e){
+      const cv=$('#rwCanvas').getBoundingClientRect();
+      RW.hoverX=Math.max(0,Math.min(1,(e.clientX-cv.left)/Math.max(1,cv.width)));
+      if(down) pick(e); else rwDraw();
+    });
+    band.addEventListener('pointerup',function(e){ down=false; try{band.releasePointerCapture(e.pointerId);}catch{} });
+    band.addEventListener('pointerleave',function(){ RW.hoverX=null; rwDraw(); });
+    addEventListener('resize',function(){ if(S.view==='rew') rwDraw(); });
+  }
+  rwLoadBand();
+};
+
+/* Age at a horizontal fraction: the inverse of the server's column spacing. It must STAY the
+   inverse, which is why the band reports newestSec/oldestSec rather than the panel assuming them —
+   two copies of a spacing rule is one copy that can be changed alone. */
+function rwAgeAt(f){
+  const b=RW.band; if(!b) return 0;
+  const a=Math.log(b.newestSec), z=Math.log(b.oldestSec);
+  return Math.exp(a+(z-a)*f);
+}
+
+async function rwLoadBand(){
+  try{
+    const cvEl=$('#rwCanvas');
+    /* One column per ~8px. Finer than this and the bars are hairlines - a picket fence rather than
+       a chart - and it is finer than the minute buckets underneath can justify anyway. */
+    const cols=Math.max(48,Math.min(150,Math.round(((cvEl&&cvEl.clientWidth)||600)/8)));
+    RW.band=await (await fetch(API('/api/band?key='+encodeURIComponent(RW.key)+'&cols='+cols))).json();
+  }catch{ return; }
+  $$('#rwKeys button').forEach(function(b){ b.classList.toggle('on',b.dataset.k===RW.key); });
+  const meta=RW_KEYS.find(function(k){return k[0]===RW.key;})||[RW.key,RW.key,''];
+  $('#rwBandLab').textContent=meta[1].toLowerCase()+' · each bar is one column: min to p95, capped at the median';
+  const withData=RW.band.columns.filter(function(c){return c.n>0;}).length;
+  const noDist=RW.band.columns.filter(function(c){return !c.n&&c.v1>0;}).length;
+  $('#rwBandNote').textContent=withData+' of '+RW.band.cols+' columns measured'
+    +(noDist?' · '+noDist+' hold a record without distributions':'');
+  rwAxis(); rwDraw();
+  if(RW.at==null) rwSeek(0.42); else rwDraw();
+}
+
+/* Labels sit at their TRUE fraction of the log axis, absolutely positioned.
+   The first cut used flex space-between, which spaces labels EVENLY - so "24h ago" sat at 0.60 of
+   the width while the data it named sat at 0.64. An axis that is nearly right is worse than one
+   that is obviously schematic: every reading taken off it is quietly wrong, and nothing on screen
+   says so. */
+function rwAxis(){
+  const b=RW.band; if(!b) return;
+  const a=Math.log(b.newestSec), z=Math.log(b.oldestSec);
+  const out=[];
+  const mark=function(txt,pos){
+    const css=pos<0.02?'left:0':pos>0.98?'right:0'
+      :'left:'+(pos*100).toFixed(2)+'%;transform:translateX(-50%)';
+    out.push('<span style="position:absolute;'+css+'">'+txt+'</span>');
+  };
+  /* Marks are DROPPED when they would collide, rather than drawn on top of each other. At 860px
+     the first cut rendered "30s60s ago" and "30d90d ago" as overlapping pairs - two true labels
+     making one false one. A minimum gap in real pixels is the test, because the axis is log-spaced
+     and the crowding is therefore uneven by construction. */
+  const px=(($('#rwCanvas')||{}).clientWidth)||600;
+  const GAP=46/px;
+  const placed=[];
+  const room=function(f){ return placed.every(function(q){ return Math.abs(q-f)>=GAP; }); };
+  const put=function(txt,f){ if(!room(f)) return; placed.push(f); mark(txt,f); };
+
+  put(rwAgeLabel(b.newestSec)+' ago',0);
+  placed.push(1);                          // reserve the far edge before the interior marks bid
+  [60,600,3600,21600,86400,604800,2592000].forEach(function(sec){
+    if(sec>b.newestSec*1.6&&sec<b.oldestSec/1.6) put(rwAgeLabel(sec),(Math.log(sec)-a)/(z-a));
+  });
+  mark(rwAgeLabel(b.oldestSec)+' ago',1);
+  $('#rwAxis').innerHTML=out.join('');
+}
+
+function rwDraw(){
+  const cv=$('#rwCanvas'), b=RW.band; if(!cv||!b) return;
+  const dpr=devicePixelRatio||1;
+  const W=cv.clientWidth, H=cv.clientHeight;
+  if(!W||!H) return;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,W,H);
+
+  const meta=RW_KEYS.find(function(k){return k[0]===RW.key;})||[];
+  const col=cssv(meta[3]||'--cpu'), ink=cssv('--ink');
+  const faint=cssv('--acc2');          // an R,G,B triple, so it is safe inside rgba()
+  const seen=b.columns.filter(function(c){return c.n;}).map(function(c){return c.max;});
+  /* Scale to the record, not to a guessed ceiling. A percentage still gets 100 so two visits to the
+     page are comparable; an unbounded rate is scaled to what actually happened. */
+  const top=meta[2]==='%'?100:Math.max(1,(seen.length?Math.max.apply(null,seen):1)*1.08);
+  const y=function(v){ return H-(Math.max(0,Math.min(top,v))/top)*H; };
+  const cw=W/b.cols;
+
+  g.strokeStyle='rgba('+faint+',.14)'; g.lineWidth=1;
+  [0.25,0.5,0.75].forEach(function(f){ g.beginPath(); g.moveTo(0,H*f); g.lineTo(W,H*f); g.stroke(); });
+
+  /* Columns holding a record with NO distribution get a muted wash rather than being skipped.
+     "we have nothing" and "we have something that cannot answer this question" are different
+     facts, and only one of them is fixed by waiting. */
+  /* Drawn as a REGION with a top edge, not a bare shadow. Ben's read of the first version was
+     "a grey space rather than a blank space", which is exactly right and exactly the distinction
+     that matters - it is neither data nor absence, it is a record that cannot answer this
+     particular question. An edge makes it look deliberate, which it is. */
+  g.fillStyle='rgba('+faint+',.09)';
+  let wash=null;
+  b.columns.forEach(function(c,i){
+    const dead=(!c.n&&c.v1>0);
+    if(dead&&wash===null) wash=i;
+    if((!dead||i===b.columns.length-1)&&wash!==null){
+      const x0=wash*cw, x1=(dead?i+1:i)*cw;
+      g.fillRect(x0,0,Math.max(1,x1-x0),H);
+      g.strokeStyle='rgba('+faint+',.30)';
+      g.setLineDash([3,3]); g.lineWidth=1;
+      g.beginPath(); g.moveTo(x0,0.5); g.lineTo(x1,0.5); g.stroke();
+      g.setLineDash([]);
+      wash=null;
+    }
+  });
+
+  /* EVERY MEASURED COLUMN IS A BAR, min to p95, with p50 marked across it.
+   *
+   * The first cut drew only connected polygons between adjacent columns, which is correct for a
+   * dense record and invisible for a sparse one: on a log axis most columns are a few pixels wide,
+   * so an isolated minute became a zero-width polygon and forty minutes of real data rendered as
+   * three hairlines. A per-column bar reads at any density and carries more - the height IS the
+   * spread within that column, so a calm minute and a violent one no longer look alike.
+   *
+   * Runs still break at gaps: nothing is drawn through a period the machine was off, because a
+   * line joined across a power cut is the most legible possible lie. */
+  const bw=Math.max(2,cw*0.78);
+  b.columns.forEach(function(c,i){
+    if(!c.n) return;
+    const x=i*cw+cw/2;
+    const hi=y(c.q['0.95']), lo=y(c.min);
+    g.globalAlpha=.42; g.fillStyle=col;
+    g.fillRect(x-bw/2,hi,bw,Math.max(1.5,lo-hi));
+    g.globalAlpha=1;
+    /* p50 as a solid cap: where the typical value sat inside that spread. */
+    g.fillStyle=col;
+    g.fillRect(x-bw/2,y(c.q['0.5'])-0.75,bw,1.5);
+  });
+
+  /* NO SECOND MARK FOR THE SAME NUMBER. An earlier version drew a p95 polyline over these bars,
+     but the top of each bar already IS p95 - so the line traced the bars it sat on and the two
+     together read as scribble rather than as a chart. On a spiky metric like GPU utilisation, which
+     genuinely swings 0-100 between samples, doubling the mark doubled the noise and hid the shape.
+     One mark per quantity: bar top = p95, cap = p50, bar bottom = the minimum. */
+
+  if(RW.hoverX!=null){
+    g.strokeStyle='rgba('+faint+',.40)'; g.lineWidth=1;
+    g.beginPath(); g.moveTo(RW.hoverX*W,0); g.lineTo(RW.hoverX*W,H); g.stroke();
+  }
+  if(RW.at!=null){
+    const age=(b.now-RW.at)/1000;
+    const a=Math.log(b.newestSec), z=Math.log(b.oldestSec);
+    const x=((Math.log(Math.max(b.newestSec,Math.min(b.oldestSec,age)))-a)/(z-a))*W;
+    g.strokeStyle=ink; g.lineWidth=1.5;
+    g.beginPath(); g.moveTo(x,0); g.lineTo(x,H); g.stroke();
+    g.fillStyle=ink;
+    g.beginPath(); g.moveTo(x-4.5,0); g.lineTo(x+4.5,0); g.lineTo(x,7); g.closePath(); g.fill();
+  }
+}
+
+/* Seek, then ask the engine what it would have said there.
+   COALESCED rather than debounced: a drag fires a great many of these and the one that matters is
+   the LAST. A request in flight is allowed to finish and the newest target is taken up after it,
+   so the panel stays responsive and no queue of stale answers lands out of order — which on a
+   scrubber shows up as the reading snapping back to a moment you already left. */
+async function rwSeek(f){
+  const b=RW.band; if(!b) return;
+  RW.at=b.now-rwAgeAt(f)*1000;
+  rwDraw();
+  $('#rwWhen').innerHTML=rwWhenText(RW.at);
+  if(RW.busy){ RW.want=RW.at; return; }
+  RW.busy=true;
+  try{
+    let target=RW.at;
+    for(;;){
+      const d=await (await fetch(API('/api/diagnose/at?t='+Math.round(target)))).json();
+      if(RW.want==null||RW.want===target){ rwPaint(d); break; }
+      target=RW.want; RW.want=null;
+    }
+  }catch{ /* keep the last good answer rather than blanking the page */ }
+  finally{ RW.busy=false; RW.want=null; }
+}
+
+function rwWhenText(ms){
+  const d=new Date(ms);
+  return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})+' '
+    +d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})
+    +'<small>'+rwAgeLabel((Date.now()-ms)/1000)+' ago</small>';
+}
+
+function rwPaint(d){
+  if(!d) return;
+  $('#rwWhen').innerHTML=rwWhenText(d.at||d.requested||RW.at);
+  const sev=(d.findings&&d.findings[0])?d.findings[0].sevName:null;
+  $('#rwSay').innerHTML = d.ok===false
+    ? '<em style="color:var(--ink-3)">no record</em>'+sysEsc(d.summary||'')
+      +' <span class="muted2">'+sysEsc(d.note||'')+'</span>'
+    : '<em>'+sysEsc(sev||'clear')+'</em>'+sysEsc(d.summary||'');
+  $('#rwCtx').textContent = d.ok===false ? ''
+    : (d.samples||0)+' samples in that minute · '+((d.coverage&&d.coverage.rows)||0)+' minutes of record around it'
+      +(d.driftSec?' · nearest record '+Math.abs(d.driftSec)+'s '+(d.driftSec>0?'before':'after')+' the point picked':'')
+      +(d.volFrom&&d.volFrom!=='archived'?' · volume '+d.volFrom:'');
+
+  $('#rwFind').innerHTML = d.ok===false
+    ? '<div class="rwu">Nothing was recorded then. That is an absence of evidence, not a clean bill of health.</div>'
+    : ((d.findings||[]).map(function(f){
+        const cls=f.sevName==='critical'?'crit':f.sevName==='warning'?'warn':'';
+        return '<div class="rwf '+cls+'"><b>'+sysEsc(f.title)+'</b>'
+          +((f.evidence||[]).length?'<span>'+sysEsc(f.evidence.slice(0,3).join(' · '))+'</span>':'')
+          +'</div>';
+      }).join('') || '<div class="rwu">No finding fired from what was archived for that moment.</div>');
+
+  $('#rwUn').innerHTML=(d.unavailable||[]).map(function(u){
+    return '<div class="rwu"><b>'+sysEsc(u.what||u.field)+'</b>'+sysEsc(u.silences||'')+'</div>';
+  }).join('') || '<div class="rwu">Everything the engine reads was archived for that moment.</div>';
+}
+
 RENDER.self=()=>{
   const el=$('#p-self');
   if(!el.dataset.built){
@@ -5241,6 +5896,16 @@ RENDER.self=()=>{
           <div class="sfx-verdict" id="sfVerdict"><em>·</em>waiting for the first attributed tick…</div>
           <div class="sfx-ctx" id="sfCtx"></div>
           <div id="sfAnat"></div>
+          <!-- THE AGREEMENT RECORD lives in the hero, not the rail, and the reason is measured: the
+               rail is six flex sections sharing one column, so a seventh got ~70px and showed one of
+               its three rows. Meanwhile the hero had ~250px of dead space above the sparkline (the
+               anatomy sizes to content; the spark is pinned to the bottom). Full width also suits
+               the content - each row carries the name of the API it was checked against, which is
+               the part that makes the claim auditable and the first thing a 300px column drops. -->
+          <div class="sfx-chk">
+            <div class="sfx-chk-h">does the instrument agree with itself<span id="sfChkCad">runs on a duty cycle</span></div>
+            <div class="sfx-chk-g" id="sfChk"><div class="sfc"><span class="muted2">no comparison taken yet — the check runs on a duty cycle, not every tick.</span></div></div>
+          </div>
           <div class="sfx-sprow"><canvas id="sfSpark"></canvas><span id="sfSparkLab"></span></div>
         </div>
         <div class="sfx-rail">
@@ -5266,7 +5931,7 @@ RENDER.self=()=>{
       <div class="sfx-foot"><b>Method.</b> The WebView2 tree is walked from its vitals-webview root (child processes carry no marker of their own); the bridge is identified as the collector's parent pid — its command line says nothing. Same counters as every other page: Working Set — Private, Task Manager's cpu formula, % of all logical threads. <b>Metering adds zero extra counter reads</b> — it rides the per-process read each tick already performs; only the pid map refreshes, every 30 s. Episodic one-shots (reclaim sizing, io traces, MFT scans) are excluded: they run when you ask, then end. <b>These numbers include the cost of producing this page.</b></div>
     </div>`;
   }
-  paintCaps(); paintMode();
+  paintCaps(); paintMode(); paintSelfCheck();
   if(S.tick) paintSelf(S.tick);
 };
 
@@ -5378,6 +6043,53 @@ async function paintMode(){
     };
   }
 }
+/* THE INSTRUMENT'S OWN AGREEMENT RECORD (B17).
+   Every other number on this page is what VITALS costs. This one is whether VITALS is right - or
+   more precisely, whether its fast path and a second, independent path into the kernel still say
+   the same thing. It is deliberately NOT called an error: an error needs ground truth, and two
+   methods disagreeing tells you one of them is wrong without telling you which. Saying "agreement"
+   is the honest form and it is the only form this page is entitled to print. */
+async function paintSelfCheck(){
+  const box=$('#sfChk'); if(!box) return;
+  let d; try{ d=await (await fetch(API('/api/selfcheck'))).json(); }catch{ return; }
+  const run=(d.sources||[]).filter(sc=>sc.independent);
+  /* THE COUNT IS THE WEAKEST SOURCE, NOT THE SUM. The header read "75 comparisons taken" while
+     every source had 25 - three sources at 25 each is not 75 comparisons of anything, and the
+     inflated number was the one a reader would quote. Sum it and the header flatters itself by
+     exactly the number of things being checked. */
+  const depth=run.length?Math.min.apply(null,run.map(sc=>sc.samples||0)):0;
+  const cad=$('#sfChkCad');
+  if(cad) cad.textContent = depth
+    ? `${depth} comparison${depth===1?'':'s'} each · runs on a duty cycle`
+    : 'runs on a duty cycle, not every tick';
+
+  const num=v=>v==null?NOVAL:fmt(v,1);
+  const cards=(d.sources||[]).map(sc=>{
+    const name=sysEsc(sc.label);
+    if(!sc.independent){
+      /* A dependent comparison is DESCRIBED and not run. Hiding it would leave the reader assuming
+         every metric is cross-checked; printing it as a pass would be worse - a check that cannot
+         fail manufactures confidence. */
+      return `<div class="sfc off"><b style="color:var(--ink-3)">not cross-checked here</b>`+
+        `<div class="sfc-n">${name}</div>`+
+        `<span class="sfc-m">${sysEsc(sc.method)} — the reference reads the same source, so a comparison could not fail and is not run.</span></div>`;
+    }
+    if(!sc.samples){
+      return `<div class="sfc"><b style="color:var(--ink-3)">waiting</b><div class="sfc-n">${name}</div>`+
+        `<span class="sfc-m">no comparison taken yet.</span></div>`;
+    }
+    const verdict = sc.healthy===true ? `<b style="color:var(--ok)">agrees</b>`
+      : sc.healthy===false ? `<b style="color:var(--crit)">disagrees</b>`
+      : `<b style="color:var(--ink-3)">too few to judge</b>`;
+    const body = sc.compare==='bound'
+      ? `${sc.violations} violation${sc.violations===1?'':'s'} in ${sc.samples}<br>${sysEsc((sc.last&&sc.last.detail)||'')}`
+      : `median ${num(sc.median)}${sc.unit==='%'?'%':' '+sc.unit} apart over ${sc.samples}<br>p95 ${num(sc.p95)}${sc.tolerance!=null?` · flags above ${sc.tolerance}`:''}`;
+    return `<div class="sfc">${verdict}<div class="sfc-n"><b style="font-weight:600;letter-spacing:0;text-transform:none;font-size:12px;color:var(--ink-2);display:inline">${name}</b> — ${body}</div>`+
+      `<span class="sfc-m">${sysEsc(sc.method)}${sc.measured?`<br>measured: ${sysEsc(sc.measured)}`:''}</span></div>`;
+  }).join('');
+  box.innerHTML = cards || `<div class="sfc"><span class="sfc-m">nothing on this platform has an independent second source.</span></div>`;
+}
+
 function paintCaps(){
   const box=$('#sfCaps'); if(!box) return;
   const c=S.caps;

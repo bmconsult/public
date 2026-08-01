@@ -50,7 +50,9 @@ Two habits that make it useful:
 | **RECLAIM** | "What can I safely delete, and how much will it give back?" Sized before you act. |
 | **STARTUP** | What launches at boot, and which of it is not Microsoft's. |
 | **SYS** | The event journal — what changed, and when. |
-| **FOOTPRINT** | What VITALS itself costs, and what this install can and cannot do. |
+| **WORKLOADS** | What each program costs in percentiles, and whether this run is unusual for it. |
+| **REWIND** | "Why was it slow yesterday at 2pm?" Runs the diagnosis at any past moment. |
+| **FOOTPRINT** | What VITALS itself costs, what this install can and cannot do, and whether its own readings agree with a second source. |
 | **TOOLS** | Clock, stopwatch, clipboard history, port lookup, watches. |
 | **ASK** | A Claude conversation about this machine. Off until you connect it. |
 
@@ -162,6 +164,10 @@ person cannot write as.
   header. Click it to expand.
 - **Docked, the whole strip drags** — except its controls. The clock, the stopwatch buttons and the
   metric tiles all still respond; press anywhere else to move the window.
+- **Link straight to a page.** `http://127.0.0.1:8790/?page=footprint` opens on FOOTPRINT rather
+  than the overview — any page name from the rail works, and so does `#footprint`. Two uses: a
+  second window can sit pinned to one page beside the first, and a bug report or a screenshot can
+  name the exact view it is about. An unknown name just opens the panel normally.
 - **Closing the panel does not stop VITALS.** The bridge keeps collecting, so history, the journal
   and the diagnosis carry on. Reopen and nothing was lost. Minimise instead if you want to keep the
   chat window up on its own.
@@ -194,10 +200,175 @@ Two things to know:
 
 ---
 
+## Workloads: is it the machine, or is it the job?
+
+Two complaints sound identical and have opposite fixes:
+
+> *"The export is slower than it used to be."*
+
+Either the export is doing more work than it used to, or the machine is worse than it used to be.
+**Every tool in this category conflates them**, because from a machine-wide average they look the
+same: high CPU, high I/O, slow. Getting it backwards wastes an afternoon in either direction — you
+either clean a disk that was fine, or you shrug at a machine that is genuinely degrading.
+
+**WORKLOADS** tells them apart, and the trick is what it compares against. Each time a program runs,
+VITALS records two things: what that program cost, **and what the machine was like while it ran**.
+So the question becomes two questions:
+
+| | compared against | answers |
+|---|---|---|
+| Is the **job** heavier? | this program's own past runs | the work grew |
+| Is the **machine** worse? | *the machine during this program's past runs* | something else is competing |
+
+The second comparison is the one that makes this work. Measuring contention against the machine's
+all-time average would simply rediscover that you are running something heavy — which is the
+complaint, not the cause. Measuring it against *what this machine was like the last twenty times you
+ran this same program* holds the workload fixed, so what is left is the machine.
+
+Four possible answers, and each gets a different sentence: nothing unusual · **the job** · **the
+machine** · **both**, which is two problems with two fixes and is said as such.
+
+**It refuses until it can mean it.** Three past runs minimum before "usual" is allowed to mean
+anything — a verdict from one prior run distinguishes nothing while sounding exactly as confident as
+one from twenty. Early on the column reads *learning*, and that is the honest state.
+
+### Reading the percentiles
+
+Each program shows **p50**, **p95** and **p99**, not an average, plus a spread bar from p50 to p95
+with a tick at p99. Two programs with the same average look identical in every number and completely
+different in that bar.
+
+The two upper percentiles do different jobs, and both are needed:
+
+- **p95** answers *"is the normal case worse than it used to be"*.
+- **p99** answers *"how bad are the bad moments"*. A program that hitches on 3% of samples is exactly
+  what people describe as stuttering, and **p95 cannot see it** — the 95th percentile sits below the
+  hitches by construction. Reporting only p95 would silently choose which kind of slowness this
+  product is able to notice.
+
+### The one caveat, stated plainly
+
+The process list VITALS reads is a **top sixteen by memory**. A program that never enters it has no
+record here at all, and one that drops out has a gap in observation rather than an ending. Sessions
+are therefore periods of *observed activity*, not process lifetimes — a program going quiet for a
+while is stitched back together rather than counted as two runs, and a genuinely new set of process
+IDs is what marks a real restart.
+
+---
+
+## Rewind: what was wrong at 2pm yesterday
+
+Every other tool on this machine answers *now*. Reliability Monitor shows crashes rather than
+pressure. Event Viewer logs events, not utilisation. `perfmon /report` is a sixty-second snapshot
+and says outright that it cannot detect historical patterns. WPA records everything and needs you
+to have started the trace **before** the problem, which nobody does.
+
+VITALS has kept the record all along. **REWIND** points the same diagnosis engine at it — the rules
+are not a second copy, so what you read is what the engine would have said at the time.
+
+**The axis is logarithmic in age.** The last ten minutes get as much width as the last ten weeks, so
+a quarter of history sits on one screen. Drag anywhere along the band and the diagnosis follows.
+Zooming became scrolling, so there is neither.
+
+Reading the band:
+
+- **Each bar is one column of time** — its height is the spread from the minimum to the 95th
+  percentile within that column, with a solid cap at the median. A calm minute and a violent one
+  look different, which is the entire reason the store keeps distributions instead of averages.
+- **Shaded columns hold a record with no distribution.** They were written before the store kept
+  them, so *"did this hold, or did it merely peak?"* cannot be asked of that moment. The numbers are
+  still there; that one question is not answerable.
+- **Gaps are gaps.** The machine was off. Nothing is drawn through them — a line joined across a
+  power cut is the most legible possible lie.
+
+**It always tells you what it could not ask.** The archive holds what was archived: process names,
+battery state and committed bytes were never rolled up, so the rules that read them cannot run at a
+past moment. Those rules would otherwise skip in silence and leave a short list that reads as a
+calm machine, so the right-hand panel names every one of them. A rewound diagnosis is systematically
+shorter than a live one, and that is a fact about the record rather than about the day.
+
+If a moment has no record at all, it says so — and says explicitly that an absence of evidence is
+not a clean bill of health.
+
+---
+
+## Percentiles, and why the store keeps distributions
+
+A mean hides exactly the thing people complain about. A minute that ran evenly at 12 ms and a minute
+that ran at 8 ms with four 108 ms hitches have the **same average**, and only one of them stutters.
+
+So the rollups store a distribution per metric per minute rather than a min/average/max. Two things
+follow. p50/p95/p99 become answerable over any span — and they are *not* recoverable after the fact
+from a stored mean, so this had to change at write time or never. And because distributions merge
+exactly, an hour is the sum of its sixty minutes and a quarter is the sum of its minutes: one stored
+resolution answers every zoom level, which is what makes REWIND's axis possible at all.
+
+Quantiles carry a stated accuracy of 2% relative, measured rather than claimed — the suite checks
+the recovered percentile against the raw samples on every distribution shape these metrics take.
+
+It costs less disk than the format it replaced. Finished days are compacted; measured on the
+author's machine, 90 days of the richer format is about 36 MB against the old format's 39 MB.
+Today's file is deliberately left uncompressed, so a crash mid-write still costs at most one line.
+
+---
+
+## Does the instrument agree with itself?
+
+Every number here comes from one reading of one API. That reading was checked by a human, once, on
+one machine — and then shipped to machines nobody has ever seen, where a locale, a driver, a kernel
+version or a virtualisation layer can change what the same call returns. FOOTPRINT already tells you
+what this platform *cannot* do. This tells you whether what it *does* do is holding up.
+
+On a duty cycle — not every tick, so it costs nothing you could measure — VITALS reads a second,
+**independent** source for a few core numbers and publishes how closely the two agree. You will find
+it at the bottom of **FOOTPRINT**.
+
+**It is not an error bar, and the difference matters.** An error bar needs ground truth. Two methods
+disagreeing tells you something is wrong; it does not tell you *which one*. So the page says
+"agrees" or "DISAGREES", never "our error is 4%" — a monitor inventing a confident number about its
+own accuracy is the exact failure this product exists to avoid.
+
+What gets compared, and what does not:
+
+| Reading | Second source | |
+|---|---|---|
+| memory available | `GlobalMemoryStatusEx` · `sysinfo(2)` · `host_statistics64` | independent everywhere |
+| cpu total | `NtQuerySystemInformation` · `host_processor_info` | independent on Windows and macOS |
+| uptime | `GetTickCount64` · `kern.boottime` | independent on Windows and macOS |
+
+On Linux the CPU and uptime rows say **"not cross-checked here"** and are not run, because the
+reference reads the same `/proc/stat` and `/proc/uptime` the collector does. A comparison that
+cannot fail is worse than no comparison — it manufactures confidence — so it is declared rather than
+quietly counted as a pass.
+
+A few things the display is careful about:
+
+- **Below about a dozen comparisons it withholds the verdict** and shows the numbers anyway.
+  "No disagreement yet" and "not checked yet" are different facts, and only one is reassuring.
+- **It judges the median, not each sample.** Two interval averages over slightly offset windows
+  simply differ, and on a busy machine the tail is wide. A path that has actually come loose moves
+  the median a long way; noise moves only the tail. The tail is still printed, because it is real.
+- **Each tolerance says where it came from.** They were measured on real hardware, not chosen.
+
+If a row ever says **DISAGREES**, that is worth a bug report — the SYS page builds the bundle. It
+means one of two paths into your kernel is not returning what it should, and the interesting part is
+finding out which.
+
+To take the same reading yourself, from a terminal in the install folder:
+
+```
+node selfcheck-live.js --samples 16
+```
+
+---
+
 ## When something looks wrong with VITALS itself
 
 - **A page is empty or a control does nothing** — check FOOTPRINT. If the capability is not available
   on this platform, the page says so there.
+- **A number looks wrong** — check the agreement record at the bottom of FOOTPRINT before assuming
+  it. If the second source agrees, the reading is probably right and your expectation is what needs
+  examining; if it says DISAGREES, you have found a real defect and it is worth reporting.
 - **An edit you made is not showing** — Ctrl+Shift+R. The panel caches.
 - **The panel will not open** — run `node start.js` from a terminal and read the output. If the
   folder came from a zip, Windows may have marked the files: `Get-ChildItem -Recurse . | Unblock-File`.
