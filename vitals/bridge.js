@@ -27,6 +27,7 @@ const { Workloads } = require('./workload');
 const { Notifier } = require('./notify');
 const { correlate } = require('./correlate');
 const { Scheduler, BootTrial } = require('./schedule');
+const { Reproducer, profileFrom } = require('./reproduce');
 const { Outcomes } = require('./outcomes');
 const { Ctl } = require('./ctl');
 const { collector } = require('./collect');
@@ -141,6 +142,8 @@ let MODE = readMode();
    Kept as one list so caps.js, the router and the UI cannot drift into three different answers. */
 const ACTION_ROUTES = new Set([
   '/api/kill',          // end a process
+  '/api/quarantine/act',// the graduated ladder: priority, affinity, suspend, and their reversal
+  '/api/replay',        // DELIBERATELY LOADS THE MACHINE — the one action here that makes it worse
   '/api/clean',         // delete caches
   '/api/restartapp',    // stop and restart an application
   '/api/ctl',           // write the machine's own settings
@@ -352,6 +355,7 @@ function raiseWindow(pid) {
 const WINDOWS_ONLY_ROUTES = new Set([
   '/api/startup', '/api/processes', '/api/conns', '/api/netinfo', '/api/nettest',
   '/api/battreport', '/api/bigdirs', '/api/reclaim', '/api/clean', '/api/kill', '/api/restartapp',
+  '/api/quarantine/act',
   '/api/mft', '/api/mftscan', '/api/scanlog', '/api/iotrace', '/api/files',
   '/api/task', '/api/clip', '/api/reveal', '/api/openrecycle',
   /* '/api/growth' LEFT THIS LIST 2026-07-31: it is pure Node (it diffs snapshots), it answers an
@@ -1518,6 +1522,12 @@ jobs.every('workload-verdicts', 120_000, () => {
 jobs.start(1000);
 
 /* B11. Measured once, held for the session, never written to disk. */
+/* B7. Constructed here beside the other long-lived subsystems; it holds no resources until asked. */
+const replay = new Reproducer();
+/* If the bridge is going down, so is the load. A stress loop that outlives the thing that started
+   it is the worst possible bug in this module. */
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { try { replay.stop('the bridge is shutting down'); } catch {} });
+
 const boot = new BootTrial();
 boot.run({
   /* How expensive is a PowerShell one-shot HERE? It is the unit of cost for most of what this
@@ -1977,6 +1987,78 @@ const server = http.createServer((req, res) => {
      is what makes the absence of a correlation legible rather than invisible. */
   /* B8/B11: what is scheduled, when it next runs, and what the boot trial decided. Published
      because a scheduler nobody can inspect is indistinguishable from a pile of timers. */
+  /* B10: the graduated quarantine. A reversible ladder in place of the one irreversible lever most
+     monitors offer.
+
+     VIEWER MODE CANNOT CLIMB IT. Viewer reports how the machine is performing and changes nothing
+     about it, and de-prioritising someone's compiler is a change. `state` is a read and is allowed,
+     which is what lets the panel show the rung a process is already on. */
+  if (p === '/api/quarantine/act') {
+    if (!PS_HOST) return json(res, 501, { error: 'the quarantine ladder is Windows-only for now' });
+    const act = url.searchParams.get('do') || 'state';
+    const target = +url.searchParams.get('pid');
+    const cores = +url.searchParams.get('cores') || 2;
+    if (!['state', 'priority', 'affinity', 'suspend', 'release'].includes(act)) {
+      return json(res, 400, { error: 'unknown rung' });
+    }
+    if (!Number.isInteger(target) || target <= 4) {
+      return json(res, 400, { error: 'need a real ?pid=' });
+    }
+    if (act !== 'state' && MODE === 'viewer') {
+      return json(res, 403, { error: 'viewer mode reports the machine, it does not change it' });
+    }
+    const script = `& '${HERE.replace(/'/g, "''")}\\quarantine.ps1' -Action ${act} ` +
+                   `-TargetPid ${target} -Cores ${Math.max(1, Math.min(64, cores))}`;
+    return ps(script, (e, d) => {
+      if (e && !d) return json(res, 500, { ok: false, error: e.message });
+      /* Journalled, because every rung is a change to how the machine behaves and the ledger is
+         what makes a change reviewable later. A silent fence is indistinguishable from a bug. */
+      if (d && d.ok && act !== 'state') {
+        /* `write([entry])`, not a `push` helper — there isn't one. The first version called
+           journal.push() inside a try/catch, which would have swallowed the TypeError and left
+           every quarantine action unjournalled while reporting success. A catch around a call you
+           have not checked is a way to not find out. */
+        const r = journal.write([{
+          sev: 'info', kind: 'act',
+          msg: `quarantine ${act}: ${d.name || target}` + (d.note ? ' — ' + d.note : ''),
+        }]);
+        if (!r || !r.written) console.error('[quarantine] the action was not journalled');
+      }
+      json(res, 200, d || { ok: false, error: 'no answer from the one-shot' });
+    });
+  }
+
+  /* B7: replay a moment out of the record.
+     `?profile=` reads a window and returns what would be reproduced WITHOUT doing it, so the panel
+     can show the load before anyone agrees to it. `?go=1` starts it, `?stop=1` ends it. */
+  if (p === '/api/replay') {
+    if (url.searchParams.get('stop') === '1') return json(res, 200, replay.stop('asked to stop'));
+
+    const to = +url.searchParams.get('to') || Date.now();
+    const from = +url.searchParams.get('from') || (to - 300_000);
+
+    if (url.searchParams.get('go') === '1') {
+      /* Loading someone's machine is a change to how it behaves, so viewer mode may not. */
+      if (MODE === 'viewer') {
+        return json(res, 403, { error: 'viewer mode reports the machine, it does not load it' });
+      }
+      const prof = profileFrom(hist, from, to);
+      if (!prof) return json(res, 400, { error: 'nothing recorded in that window to replay' });
+      const r = replay.start(prof, latest, { seconds: +url.searchParams.get('seconds') || prof.seconds });
+      if (r.ok) {
+        journal.write([{ sev: 'warn', kind: 'act',
+          msg: `replaying a recorded moment: ${prof.describes} for ${r.remainingSec}s` }]);
+      }
+      return json(res, r.ok ? 200 : 400, r);
+    }
+
+    if (url.searchParams.get('profile') === '1') {
+      const prof = profileFrom(hist, from, to);
+      return json(res, 200, prof || { error: 'nothing recorded in that window' });
+    }
+    return json(res, 200, replay.status());
+  }
+
   if (p === '/api/schedule') {
     return json(res, 200, { scheduler: jobs.status(), trial: boot.status() });
   }

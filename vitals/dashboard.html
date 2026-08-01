@@ -1194,6 +1194,18 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
 @media (max-height:700px){ .wld-name{font-size:21px} .wlx-foot{display:none} }
 
 
+
+/* ---------- B20: PULSE ----------
+   A particle field driven by measured pressure, not by a loop. It exists because a number that
+   changes and a SHAPE that changes are read by different parts of the eye: a peripheral glance at
+   the panel should carry "the machine is straining" before any digit is read. */
+.pulse-wrap{position:relative;border:1px solid var(--line-2);border-radius:10px;overflow:hidden;
+  background:var(--gl-1);height:260px}
+.pulse-wrap canvas{display:block;width:100%;height:100%}
+.pulse-cap{position:absolute;left:12px;bottom:9px;font-size:9.5px;letter-spacing:.05em;
+  color:var(--ink-3);pointer-events:none}
+@media (max-height:760px){ .pulse-wrap{height:180px} }
+
 /* ---------- B19: the growth treemap ----------
    Area is size, hue is RATE. Keeping those two independent is the entire point: the diverging bar
    list beside it sorts by absolute GB, so a 0.4 GB folder that doubled overnight sits at the bottom
@@ -1929,16 +1941,38 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
   /* Colours and response are UNIFORMS, not constants: the theme system feeds them from CSS custom
      properties (--f-cool/--f-acc/--f-warm/--f-base/--f-range/--f-vig/--f-pmul) so light renders a
      pale wash, pro a near-flat sheet, beast an amped storm — same measured pressure P drives all. */
-  const fs=`precision mediump float;uniform vec2 R;uniform float T,P,SPD;
+  /* A5. LOD is how many fbm octaves this canvas can actually resolve; WB budgets the
+     pressure-driven part of the domain warp. Both are computed on the CPU from the MEASURED
+     drawing-buffer size, because the shader cannot know the device pixel ratio or the docked
+     geometry, and guessing at them is what produces shimmer. */
+  const fs=`precision mediump float;uniform vec2 R;uniform float T,P,SPD,LOD,WB;
   uniform vec3 UC,UA,UW;uniform vec4 FP;
   float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
   float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
     return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
-  float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n(p);p*=2.03;a*=.5;}return v;}
+  /* BAND-LIMITED fbm. An octave whose period falls under about two pixels carries no detail - it
+     carries ALIASING, which reads as shimmer and crawls once the field animates. LOD is how many
+     octaves this resolution can hold; the last one FADES rather than being dropped, so resizing a
+     window does not pop an octave in and out. */
+  float fbm(vec2 p){
+    float v=0.,a=.5,wsum=0.;
+    for(int i=0;i<5;i++){
+      float w=clamp(LOD-float(i),0.,1.);
+      if(w>0.){ v+=a*w*n(p); wsum+=a*w; }
+      p*=2.03; a*=.5;
+    }
+    /* Renormalised by the weight actually used, so dropping an octave changes the DETAIL and not
+       the brightness. Without this the field visibly dims as the window shrinks. */
+    return wsum>0. ? v/wsum*0.9375 : 0.;
+  }
   void main(){
     vec2 uv=(gl_FragCoord.xy-.5*R)/R.y;
     float t=T*SPD;
-    float Q=P*FP.w;
+    /* WARP BUDGET. The static warp is the field's designed look and is untouched. What is budgeted
+       is the PRESSURE-DRIVEN term: unbounded, a machine under load pushes the domain warp past the
+       point where it folds over itself, and the field stops reading as a field and starts reading
+       as noise - at precisely the moment the panel most needs to stay legible. */
+    float Q=P*FP.w*WB;
     vec2 q=vec2(fbm(uv*1.6+t),fbm(uv*1.6+vec2(3.1,1.7)-t));
     vec2 r=vec2(fbm(uv*1.9+q*(1.1+Q*1.9)+t*1.3),fbm(uv*1.9+q*1.4+vec2(8.3,2.8)-t*.9));
     float f=fbm(uv*2.2+r*(1.0+Q*1.2));
@@ -1958,6 +1992,33 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
   const uUC=gl.getUniformLocation(pr,'UC'),uUA=gl.getUniformLocation(pr,'UA'),
         uUW=gl.getUniformLocation(pr,'UW'),uFP=gl.getUniformLocation(pr,'FP'),
         uSP=gl.getUniformLocation(pr,'SPD');
+  const uLOD=gl.getUniformLocation(pr,'LOD'), uWB=gl.getUniformLocation(pr,'WB');
+
+  /* A5, computed rather than guessed.
+
+     BAND LIMIT: uv is (fragCoord - R/2)/R.y, so one uv unit spans R.y device pixels. The coarsest
+     fbm here samples at 1.6 cycles per uv unit and each octave multiplies frequency by 2.03, so
+     octave i has a period of R.y / (1.6 * 2.03^i) pixels. Nyquist puts the floor at two pixels; the
+     limit is set at three for margin, because this field MOVES and a crawling alias is far more
+     visible than a static one.
+
+     WARP BUDGET: the pressure term displaces the domain by about 1.9 uv at 1.9 cycles/uv, so
+     amp*2pi*freq lands far above the 1.2-1.5 band inside which a warp still reads as structure. WB
+     brings the PRESSURE-DRIVEN part into that band and leaves the designed static look untouched -
+     without it, a machine under load pushes the field into pure noise at exactly the moment the
+     panel most needs to stay legible. */
+  function fieldLimits(h){
+    const px=Math.max(1,h||1), base=1.6, ratio=2.03, minPeriodPx=3;
+    const lod=Math.log(px/(base*minPeriodPx))/Math.log(ratio)+1;
+    const usable=Math.max(1,Math.min(5,lod));
+    const raw=1.9*2*Math.PI*1.9;
+    return { lod:usable, wb:Math.max(0.05,Math.min(1,1.35/raw)),
+             octaves:+usable.toFixed(2), warpRaw:+raw.toFixed(2), heightPx:px };
+  }
+  let FIELD_LIMITS=fieldLimits(0);
+  /* Exposed so the panel and a capture harness can read what the field DECIDED, rather than taking
+     the shader's word for it. */
+  window.__vitalsFieldLimits=()=>FIELD_LIMITS;
   /* theme → uniforms. Called at init and by setTheme(); cssv isn't defined yet at this point in
      the file, so read the vars directly. */
   function fieldTheme(){
@@ -2014,6 +2075,8 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
     size();
     try{
       gl.uniform2f(uR,cv.width,cv.height); gl.uniform1f(uT,(now-t0)/1000);
+      FIELD_LIMITS=fieldLimits(cv.height);
+      gl.uniform1f(uLOD,FIELD_LIMITS.lod); gl.uniform1f(uWB,FIELD_LIMITS.wb);
       gl.uniform1f(uP,E('press_g',(ease.press||0)/100,.05)); gl.drawArrays(gl.TRIANGLES,0,3);
     }catch(e){ __VB.fldErrs=++fldErrs; if(fldErrs===1) console.warn('field draw error (loop kept alive):',e); }
   }
@@ -2027,6 +2090,8 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
       size();
       gl.uniform2f(uR,cv.width,cv.height);
       gl.uniform1f(uT,(performance.now()-t0)/1000);
+      FIELD_LIMITS=fieldLimits(cv.height);
+      gl.uniform1f(uLOD,FIELD_LIMITS.lod); gl.uniform1f(uWB,FIELD_LIMITS.wb);
       gl.uniform1f(uP,(ease.press||0)/100);
       gl.drawArrays(gl.TRIANGLES,0,3);
     }catch(e){ __VB.fldErrs=++fldErrs; }
@@ -2510,6 +2575,9 @@ function paintTiles(){
 /* ============ routing ============ */
 const RENDER={};
 function go(v){
+  /* B20 draws only while its own page is showing. Stopped on the way OUT rather than relying on the
+     loop noticing, so the frame after a page change is already free. */
+  if(S.view==='fx'&&v!=='fx'){ try{ pulseStop(); }catch{} }
   S.view=v;
   $$('.rb').forEach(b=>b.classList.toggle('on',b.dataset.go===v));
   $$('.page').forEach(p=>p.classList.toggle('on',p.id==='p-'+v));
@@ -5618,6 +5686,150 @@ function gtmHook() {
   wrap.onmouseleave = () => { tip.style.opacity = 0; };
 }
 
+
+/* ================= B20: PULSE — rotated attraction =================
+ * A particle system whose parameters are the machine's measured pressure. It is on the FX page
+ * rather than the overview because it is a mood instrument, not a gauge: it answers "is this
+ * machine straining" from across a room, before any digit is legible.
+ *
+ * THE PHYSICS, AND WHY THE UNUSUAL PART IS THE LOAD-BEARING PART.
+ *
+ * Particles are attracted to a moving centre, but the attraction vector is ROTATED by 66-80 degrees
+ * rather than pointing straight at it. That single change is the whole visual: pure attraction
+ * collapses every particle into the centre within a second or two and leaves a dot, which is why
+ * naive particle fields all look the same and all look dead. Rotating the force close to - but not
+ * exactly - 90 degrees turns collapse into ORBIT, and the few degrees short of perpendicular are
+ * what supply the slow inward drift that keeps the streams coherent instead of dispersing.
+ *
+ * ALTERNATING SPIN: half the particles rotate one way and half the other. Two counter-rotating
+ * populations shear against each other and produce filaments; a single population just makes a
+ * uniform swirl, which reads as a screensaver.
+ *
+ * A SOFT REPULSIVE CORE stops the centre becoming a singularity. Without it the inward drift wins
+ * eventually and everything piles into a bright dot - the exact failure the rotation was introduced
+ * to avoid, arriving more slowly.
+ *
+ * COST. It draws only while the FX page is visible and the window has focus, at a capped frame
+ * rate, on a canvas sized to its box. The FOOTPRINT page charges VITALS for its own CPU, so a
+ * decorative surface that ran while nobody was looking would be charged to the user and defended
+ * by nobody. */
+const PULSE = {
+  parts: [], raf: 0, last: 0, cv: null, cx: null, t: 0,
+  /* Read from the live tick each frame; these are defaults for the moments before one arrives. */
+  pressure: 0.2, spin: 0.5,
+};
+
+function pulseInit(cv){
+  PULSE.cv = cv;
+  PULSE.cx = cv.getContext('2d');
+  const N = 260;
+  PULSE.parts = Array.from({ length: N }, (_, i) => ({
+    x: Math.random(), y: Math.random(),
+    vx: 0, vy: 0,
+    /* ALTERNATING SPIN: two counter-rotating populations that shear against each other. One
+       population alone is a uniform swirl, which reads as a screensaver rather than as a state. */
+    dir: i % 2 ? 1 : -1,
+    /* 66-80 degrees, per particle, so the streams are not all on identical orbits. */
+    ang: (66 + Math.random() * 14) * Math.PI / 180,
+    hue: Math.random(),
+    m: 0.6 + Math.random() * 0.8,
+  }));
+}
+
+function pulseStep(dt){
+  const P = PULSE, cx = P.cx, cv = P.cv;
+  if (!cx || !cv) return;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  P.t += dt;
+  /* Pressure drives speed and reach. It is the MEASURED figure, not a random walk — the entire
+     claim of this surface is that its motion means something. */
+  const p = Math.max(0, Math.min(1, P.pressure));
+  const pull = 0.35 + p * 1.5;
+  const speedCap = 0.22 + p * 0.5;
+
+  /* The attractor drifts slowly, so the composition changes without the particles being teleported. */
+  const ax = 0.5 + Math.cos(P.t * 0.11) * 0.16;
+  const ay = 0.5 + Math.sin(P.t * 0.083) * 0.14;
+
+  /* Trails: a translucent wipe rather than a clear, so motion leaves a readable path. */
+  cx.globalCompositeOperation = 'source-over';
+  cx.fillStyle = `rgba(${cssv('--acc2')},${0.055 + p * 0.03})`;
+  cx.fillRect(0, 0, W, H);
+  cx.globalCompositeOperation = 'lighter';
+
+  const warm = cssv('--crit'), cool = cssv('--cpu'), mid = cssv('--mem');
+  for (const q of P.parts) {
+    let dx = ax - q.x, dy = ay - q.y;
+    const d = Math.hypot(dx, dy) + 1e-4;
+    dx /= d; dy /= d;
+
+    /* THE ROTATION. Straight attraction collapses everything to a point; rotating the force close
+       to perpendicular turns that collapse into an orbit, and the few degrees SHORT of 90 are what
+       supply the slow inward drift that keeps streams coherent instead of dispersing. */
+    const a = q.ang * q.dir;
+    const rx = dx * Math.cos(a) - dy * Math.sin(a);
+    const ry = dx * Math.sin(a) + dy * Math.cos(a);
+
+    /* SOFT REPULSIVE CORE. Without it the inward drift eventually wins and everything piles into a
+       bright dot — the failure the rotation exists to avoid, arriving more slowly. */
+    const core = Math.max(0, 0.14 - d) * 9;
+
+    q.vx += (rx * pull - dx * core) * dt / q.m;
+    q.vy += (ry * pull - dy * core) * dt / q.m;
+
+    const sp = Math.hypot(q.vx, q.vy);
+    if (sp > speedCap) { q.vx = q.vx / sp * speedCap; q.vy = q.vy / sp * speedCap; }
+    q.vx *= 0.985; q.vy *= 0.985;                 // drag, or energy accumulates without bound
+    q.x += q.vx * dt; q.y += q.vy * dt;
+
+    /* Wrap rather than bounce: a bounce puts a visible wall in a field that has no wall. */
+    if (q.x < -0.05) q.x += 1.1; if (q.x > 1.05) q.x -= 1.1;
+    if (q.y < -0.05) q.y += 1.1; if (q.y > 1.05) q.y -= 1.1;
+
+    const col = p > 0.66 ? warm : p > 0.33 ? mid : cool;
+    cx.globalAlpha = 0.10 + sp / speedCap * 0.5;
+    cx.fillStyle = col;
+    const r = 0.8 + q.m * (0.7 + p * 1.1);
+    cx.beginPath(); cx.arc(q.x * W, q.y * H, r, 0, 6.283); cx.fill();
+  }
+  cx.globalAlpha = 1;
+  cx.globalCompositeOperation = 'source-over';
+}
+
+function pulseStart(){
+  if (PULSE.raf) return;
+  const cv = $('#pulseC'); if (!cv) return;
+  if (!PULSE.parts.length) pulseInit(cv); else PULSE.cv = cv, PULSE.cx = cv.getContext('2d');
+  PULSE.last = performance.now();
+  const loop = (now) => {
+    /* Stops itself the moment the page is not being looked at. A decorative surface that runs while
+       nobody is watching is charged to the user by the FOOTPRINT page and defended by nobody. */
+    if (S.view !== 'fx' || document.hidden) { PULSE.raf = 0; return; }
+    const dt = Math.min(0.05, (now - PULSE.last) / 1000);
+    PULSE.last = now;
+    if (S.tick) {
+      const t = S.tick;
+      const cpu = (t.cpu && t.cpu.total) || 0, mem = (t.mem && t.mem.pct) || 0;
+      const q = (t.disk && t.disk.io && t.disk.io.queue) || 0;
+      /* The same pressure figure the rest of the panel uses, so the mood and the numbers cannot
+         disagree with each other. */
+      PULSE.pressure = Math.max(0, Math.min(1, (cpu / 100) * 0.5 + (mem / 100) * 0.35 + Math.min(1, q / 4) * 0.15));
+    }
+    try { pulseStep(dt); } catch (e) { PULSE.raf = 0; console.warn('pulse', e); return; }
+    const cap = $('#pulseCap');
+    if (cap) cap.textContent = 'pressure ' + (PULSE.pressure * 100).toFixed(0)
+      + '% · ' + PULSE.parts.length + ' particles · rotated attraction 66–80°, alternating spin';
+    PULSE.raf = requestAnimationFrame(loop);
+  };
+  PULSE.raf = requestAnimationFrame(loop);
+}
+function pulseStop(){ if (PULSE.raf) cancelAnimationFrame(PULSE.raf); PULSE.raf = 0; }
+
 /* ================= A4 · A3 · A11: render quality =================
  * Three things that are invisible when they work and obvious the moment they do not.
  */
@@ -6780,6 +6992,8 @@ RENDER.fx=()=>{
         <span class="nm" style="color:${L.ink}">${L.label.toUpperCase()}</span>
         <span class="chips">${L.chips.map(c=>`<i style="background:${c}"></i>`).join('')}</span>
         <span class="sub" style="color:${L.ink}">${L.sub}</span></div>`;}).join('')}</div>
+    <div class="pulse-wrap" style="margin-top:10px"><canvas id="pulseC"></canvas>
+      <span class="pulse-cap" id="pulseCap"></span></div>
     <div class="xgrid" style="margin-top:4px">
       <div class="xcol">
         <div class="syssec">field &amp; light · live on the glass while you drag</div>
@@ -6832,6 +7046,9 @@ RENDER.fx=()=>{
     $$('#fxMachine .mtile').forEach(m=>m.onclick=()=>applyMachinePreset(m.dataset.mp));
   }
   fxPaint();
+  /* B20. Started here rather than on a timer, so it exists exactly as long as the page it lives on
+     — and it stops itself the moment the view changes or the window is hidden. */
+  try{ pulseStart(); }catch(e){ console.warn('pulse', e); }
 };
 
 /* ============ RIG — orchestration (2026-07-29) ============

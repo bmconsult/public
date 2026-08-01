@@ -53,6 +53,9 @@ const FILES = [
   // B8 + B11: one scheduler for every periodic job, and the boot trial that measures this host
   // once and holds the verdict for the session without ever writing it down.
   'schedule.js', 'test-schedule.js',
+  // B7 + B10: replaying a recorded moment (the only thing here that deliberately loads the
+  // machine, hence the bounds inside it), and the reversible quarantine ladder.
+  'reproduce.js', 'test-reproduce.js', 'quarantine.ps1',
   // Windows host + one-shots
   'panel.ps1', 'launch.ps1', 'metrics.ps1', 'winagent.ps1', 'clipwatch.ps1', 'mftscan.ps1',
   'iotrace.ps1', 'clean-admin.ps1', 'space-admin.ps1', 'filetools.ps1', 'badge.ps1', 'shot.ps1',
