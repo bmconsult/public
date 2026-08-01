@@ -1,6 +1,6 @@
 # INSTALL_FOR_CLAUDE.md — installation procedure
 
-**VITALS 0.9.1.** Pre-1.0 deliberately: Windows complete, Linux verified end to end, macOS written
+**VITALS 0.9.2.** Pre-1.0 deliberately: Windows complete, Linux verified end to end, macOS written
 but never run on hardware, action layer Windows-only. Report those honestly rather than smoothing
 them over.
 

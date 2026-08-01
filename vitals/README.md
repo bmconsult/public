@@ -80,11 +80,11 @@ link downloads directly; unpack it and run Setup.
 
 | | Download | Size | Then |
 |---|---|---|---|
-| **Windows** | **[⬇ vitals-0.9.1-win-x64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/vitals-0.9.1-win-x64.zip)** | 35 MB | Extract → double-click **`Setup.cmd`** |
-| Windows on ARM | [⬇ vitals-0.9.1-win-arm64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/vitals-0.9.1-win-arm64.zip) | 31 MB | Extract → double-click **`Setup.cmd`** |
-| **macOS** (M1–M4) | **[⬇ vitals-0.9.1-mac-arm64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/vitals-0.9.1-mac-arm64.tar.gz)** | 39 MB | `tar -xzf …`, then `./setup.sh` |
-| macOS (Intel) | [⬇ vitals-0.9.1-mac-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/vitals-0.9.1-mac-x64.tar.gz) | 40 MB | `tar -xzf …`, then `./setup.sh` |
-| **Linux** | **[⬇ vitals-0.9.1-linux-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/vitals-0.9.1-linux-x64.tar.gz)** | 44 MB | `tar -xzf …`, then `./setup.sh` |
+| **Windows** | **[⬇ vitals-0.9.2-win-x64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-win-x64.zip)** | 35 MB | Extract → double-click **`Setup.cmd`** |
+| Windows on ARM | [⬇ vitals-0.9.2-win-arm64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-win-arm64.zip) | 31 MB | Extract → double-click **`Setup.cmd`** |
+| **macOS** (M1–M4) | **[⬇ vitals-0.9.2-mac-arm64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-mac-arm64.tar.gz)** | 39 MB | `tar -xzf …`, then `./setup.sh` |
+| macOS (Intel) | [⬇ vitals-0.9.2-mac-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-mac-x64.tar.gz) | 40 MB | `tar -xzf …`, then `./setup.sh` |
+| **Linux** | **[⬇ vitals-0.9.2-linux-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-linux-x64.tar.gz)** | 44 MB | `tar -xzf …`, then `./setup.sh` |
 
 <details>
 <summary><b>Not sure which one?</b></summary>
@@ -101,7 +101,7 @@ anything, because there is no installer.
 </details>
 
 Every bundle is listed with its SHA-256 in
-[`SHA256SUMS.txt`](https://github.com/bmconsult/public/releases/download/vitals-v0.9.1/SHA256SUMS.txt),
+[`SHA256SUMS.txt`](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/SHA256SUMS.txt),
 and the build is reproducible — rebuild from source with `node bundle.js` and you get the same hashes.
 
 > On macOS and Linux use the `.tar.gz` — zip does not carry the executable bit.
@@ -129,7 +129,7 @@ actually produced telemetry before reporting success.
 
 ## Platform support, honestly
 
-This is version **0.9.1**, and pre-1.0 on purpose. The version number is doing the same job as
+This is version **0.9.2**, and pre-1.0 on purpose. The version number is doing the same job as
 everything else here: describing what was actually verified.
 
 Counts below come from the capability manifest itself, not from a summary of it — 33 capabilities,

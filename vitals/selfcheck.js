@@ -81,8 +81,26 @@ const REFS = {
      * reading the wrong quantity on a 16 GB host is wrong by thousands of MB, not by ninety. */
     compare: { win32: 'delta', linux: 'bound', darwin: 'bound' },
     medianTolerance: { win32: 200 },
+    /* THE BOUND IS ONE-SIDED AND IT NEEDS SLACK, because "available" is not simply "free plus
+     * cache" - it is free plus reclaimable MINUS a reserve the kernel will not hand out.
+     *
+     * On linux MemAvailable is roughly MemFree - watermark_low + reclaimable/2. On a machine with
+     * meaningful page cache the reclaimable term dominates and available sits far above free, which
+     * is the case the bound was written for. On a machine with almost NO cache - a freshly booted
+     * CI runner, 14.9 GB free of 16 - the watermark term dominates instead and available sits
+     * slightly BELOW free. Both are correct kernel behaviour; only the invariant was wrong.
+     *
+     * Caught by this module's own CI step on the first Linux run after it shipped: 16 violations in
+     * 16 samples, consistently 8-23 MB. Systematic, not noise, and on a platform the author does
+     * not own - which is the entire argument for having built it.
+     *
+     * The slack scales with RAM because the watermark does (min_free_kbytes grows with the square
+     * root of memory), with a floor for small machines. It stays far below anything structural: a
+     * path reading the wrong field is wrong by thousands of MB, not by a watermark. */
+    boundSlack: (totalMB) => Math.max(256, (totalMB || 0) * 0.03),
     measured: 'win32: |delta| median 12 · p95 85 · max 91 MB (45 samples, this machine). ' +
-              'linux/darwin: a true bound, available ⊇ free.',
+              'linux/darwin: available ≥ free − watermark; measured 8–23 MB below free on an ' +
+              'uncached ubuntu-22.04/24.04 runner (16/16 samples, CI 2026-08-01).',
   },
   cpuPct: {
     label: 'cpu total',
@@ -261,11 +279,17 @@ class SelfCheck {
         theirs = ref.memFreeMB;
         if (mine != null && theirs != null) {
           if (per(r.compare, this.plat) === 'bound') {
-            /* Where the reference really is free pages, AVAILABLE >= FREE is an invariant rather
-               than a tolerance, so it is judged per sample - the only comparison here that is
-               exact. */
-            ok = mine >= theirs - 1;                // 1 MB of rounding between the two units
-            detail = `available ${mine} MB ≥ free ${theirs} MB`;
+            /* ONE-SIDED, WITH SLACK. Available may sit far ABOVE free (reclaimable cache) and only
+               slightly below it (the kernel's reserve). Judged per sample, because outside that
+               slack it is a genuine structural error rather than a tolerance question. */
+            const slack = typeof r.boundSlack === 'function'
+              ? r.boundSlack(tick.mem && tick.mem.totalMB)
+              : 1;
+            ok = mine >= theirs - slack;
+            detail = mine >= theirs
+              ? `available ${mine} MB ≥ free ${theirs} MB`
+              : `available ${mine} MB is ${Math.round(theirs - mine)} MB below free ${theirs} MB ` +
+                `(within the ${Math.round(slack)} MB reserve)`;
           } else {
             delta = Math.abs(mine - theirs);
             detail = `${mine} MB vs ${theirs} MB`;

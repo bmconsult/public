@@ -70,6 +70,26 @@ console.log('\n--- the bound invariant, WHERE IT HOLDS: linux and darwin ---');
   check('one violation makes the source unhealthy', r.healthy === false);
   check('a bound source reports violations, not a median', r.median === null);
 
+  /* THE CASE CI FOUND, pinned so it cannot come back.
+     MemAvailable is roughly MemFree − watermark_low + reclaimable/2. On a machine with little page
+     cache the watermark term dominates and available sits legitimately BELOW free. The first cut
+     asserted a hard `available ≥ free` and the very first Linux CI run reported 16 violations in
+     16 samples, 8–23 MB each — correct kernel behaviour, wrong invariant. The bound is one-sided
+     with slack scaled to installed RAM. */
+  const s2 = sc('linux');
+  os.freemem = () => 14963 * 1048576;
+  await s2.check(tick({ freeMB: 14940 }));           // 23 MB below free, exactly as CI measured
+  let r2 = s2.summary().sources.find((x) => x.key === 'memAvailMB');
+  check('available just below free is the kernel reserve, not a defect',
+    r2.violations === 0, JSON.stringify(r2.last));
+  check('and the detail says so rather than reporting a bare failure',
+    /within the .* reserve/.test((r2.last && r2.last.detail) || ''), r2.last && r2.last.detail);
+
+  const s3 = sc('linux');
+  await s3.check(tick({ freeMB: 8000 }));            // 7 GB below free: structural, not a watermark
+  const r3 = s3.summary().sources.find((x) => x.key === 'memAvailMB');
+  check('but a structural gap is STILL caught', r3.violations === 1, JSON.stringify(r3.last));
+
   os.freemem = realFree;
 }
 
