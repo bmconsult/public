@@ -299,7 +299,15 @@ const PLATFORMS = {
        battery internals, a GPU that publishes IOAccelerator statistics, thermals, and human eyes
        agreeing with Activity Monitor and System Settings. Run tools/finish-on-a-mac.sh on a
        physical Mac; it banks all of that, screenshots included. Then this becomes a dated
-       sentence naming the hardware, like the Linux block's. */
+       sentence naming the hardware, like the Linux block's.
+       2026-08-02: re-run green on macos-14 AND macos-15 — parsers, the simulation, the LIVE
+       collector, the route guard and both posix suites, with fixtures captured from the host
+       itself. Two OS versions rather than one, and now REPRODUCIBLE from this repository rather
+       than cited from memory. It stays FALSE anyway, and that is the point: more CI is still CI.
+       Every runner lacks a battery, a GPU publishing IOAccelerator statistics, and a real thermal
+       path, so no number of green ticks can retire those three. Flipping this on the strength of a
+       broader CI matrix would be exactly the move this file exists to refuse — evidence widening
+       while the claim it cannot support stays out of reach. */
     verified: false,
     verifyNote: 'PARTIALLY VERIFIED. On 2026-07-31 the full CI suite went green on real Apple ' +
                 'Silicon, first try, both runners (macos-14 + macos-15): the live collector ' +
