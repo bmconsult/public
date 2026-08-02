@@ -185,6 +185,39 @@ setTimeout(() => {
   const upH = parseFloat(fs.readFileSync('/proc/uptime', 'utf8')) / 3600;
   check('uptime matches /proc/uptime', Math.abs(t.up - upH) < 0.1, `${t.up}h vs ${upH.toFixed(2)}h`);
 
+  /* ---- IS os.freemem() AN INDEPENDENT ROUTE ON THIS KERNEL? ---------------------------------
+   * selfcheck.js compares the collector's /proc/meminfo MemAvailable against os.freemem() and
+   * calls the pair independent. That claim is DECLARED UNVERIFIED there
+   * (`independenceVerified.linux = null`) because it cannot be settled from Windows: in libuv
+   * >= 1.45 — this Node ships 1.49.2 — uv_get_free_memory() reads /proc/meminfo MemFree first and
+   * only falls back to sysinfo(2). If it reads the file, then both sides of the "cross-check" are
+   * reading one file.
+   *
+   * A real kernel settles it byte-exactly, and this suite is the only thing that runs on one. It
+   * deliberately does not assert WHICH answer is right — both are defensible — it PRINTS the answer
+   * so the declaration can be corrected from evidence. The darwin uptime leg spent a release
+   * claiming a cross-check it was not performing because nobody ran the equivalent two lines. */
+  console.log('\n--- is os.freemem() actually a separate route from /proc/meminfo? ---');
+  {
+    const os = require('os');
+    const mi = fs.readFileSync('/proc/meminfo', 'utf8');
+    const kb = (k) => {
+      const m = new RegExp('^' + k + ':\\s+(\\d+)', 'm').exec(mi);
+      return m ? +m[1] * 1024 : null;
+    };
+    const free = os.freemem(), memFree = kb('MemFree'), memAvail = kb('MemAvailable');
+    const identical = memFree !== null && free === memFree;
+    console.log(`  os.freemem()           ${free}`);
+    console.log(`  /proc/meminfo MemFree  ${memFree}   ${identical ? 'IDENTICAL — libuv is reading the file'
+                                                                   : 'differs by ' + Math.abs(free - memFree)}`);
+    console.log(`  /proc/meminfo MemAvail ${memAvail}   (what the collector reports)`);
+    console.log(identical
+      ? '  => NOT an independent route. selfcheck.js independenceVerified.linux should read FALSE,\n' +
+        '     and that leg is two fields of one file rather than two sources.'
+      : '  => a genuinely separate route. independenceVerified.linux should read TRUE.');
+    check('the route question was answered on a real kernel', memFree !== null, 'MemFree unreadable');
+  }
+
   console.log('\n--- shape compatibility with the Windows contract ---');
   for (const k of ['t', 'ts', 'cpu', 'mem', 'disk', 'net', 'proc', 'pwr', 'self', 'up']) {
     check(`tick has .${k}`, k in t);

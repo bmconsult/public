@@ -23,6 +23,9 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+/* One selector for the system volume, shared with the engine. See snap() for why it is imported
+   rather than written again. */
+const { systemVolume } = require('./diagnose');
 
 const BROADCAST = `
 Add-Type -Name N -Namespace X -MemberDefinition '[DllImport("user32.dll",SetLastError=true,CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,UIntPtr w,string l,uint f,uint t,out UIntPtr r);'
@@ -172,11 +175,31 @@ class Ctl {
       return lines.slice(-n).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse();
     } catch { return []; }
   }
+  /* THE SAME TWO DEFECTS OUTCOMES.JS WAS JUST FIXED FOR, in the function that writes the OTHER half
+   * of the same ledger - found by review after the first fix, which is the argument for grepping the
+   * whole tree rather than the file the bug was reported in.
+   *
+   *   `find(v => v.id === 'C:')` matches nothing on Linux or macOS, where the root volume is '/'.
+   *   Every CTRL lever pull on those platforms recorded `dfree: null` while looking like a full row.
+   *   This class has no platform guard and is constructed unconditionally (bridge.js), so it runs
+   *   there.
+   *
+   *   `pagesSec || 0` turns "not measured on this platform" into 0 - and a hard-fault rate of zero
+   *   is a REAL, common reading on an idle machine, so the substitution is invisible. This is the
+   *   column the ledger later differences to decide whether a lever helped; a null that became a
+   *   zero produces a confident measured delta out of two absent readings.
+   */
   snap(latest) {
     if (!latest) return null;
-    const c = (latest.disk && latest.disk.vols || []).find((v) => v.id === 'C:');
-    return { cpu: latest.cpu.total, ram: latest.mem.pct, dq: latest.disk.io.queue,
-      flt: latest.mem.pagesSec || 0, dfree: c ? c.freeGB : null };
+    const c = systemVolume(latest);
+    const n = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+    return {
+      cpu: latest.cpu ? n(latest.cpu.total) : null,
+      ram: latest.mem ? n(latest.mem.pct) : null,
+      dq: latest.disk && latest.disk.io ? n(latest.disk.io.queue) : null,
+      flt: latest.mem ? n(latest.mem.pagesSec) : null,
+      dfree: c ? n(c.freeGB) : null,
+    };
   }
   /* act: validate → read current (for baseline + ledger 'before') → write → verify-read */
   act(name, body, latest, cb) {

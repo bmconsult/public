@@ -180,8 +180,74 @@ class Sweep {
        Without the last one the sweep hallucinated a winner in 12% of pure-noise runs. */
     const nPerArm = Math.max(1, Math.min(...arms.map((a) => a.n)));
     const seMedian = (noise / Math.sqrt(nPerArm)) * 1.253;
-    const bar = seMedian * rangeFactor(arms.length) * SAFETY;
-    const distinguishable = noise > 0 ? effect >= bar : effect > 0;
+    const bar = noise > 0 ? seMedian * rangeFactor(arms.length) * SAFETY : null;
+
+    /* ---------------------------------------------------------------------------------------
+       A MEASURED SPREAD OF ZERO MEANS THE INSTRUMENT IS QUANTIZED, NOT THAT THE MACHINE IS QUIET.
+
+       The first version read `noise > 0 ? effect >= bar : effect > 0`, so a zero spread produced a
+       bar of 0.00 and ANY gap at all won. That was not the rare corner it was written as. The
+       production measurement here is a median frame interval, and frames arrive on vsync, so
+       samples land on 16.7 ms steps; in 300 of 300 trial sweeps more than half of them shared a
+       step and the MAD came out exactly zero. The branch with no bar in it was the only branch that
+       ever ran.
+
+       The fix is not to invent a floor. A magnitude test needs a spread, and there isn't one - but
+       there is still real evidence in the data, and it is of a different KIND: whether the arms
+       SEPARATE. If nine of nine samples on one arm all read better than nine of nine on the other,
+       that is strong evidence however coarse the steps are, and no estimated noise floor is needed
+       to say so.
+
+       So the test becomes exact and combinatorial. Under the null the two arms are exchangeable, so
+       the chance that one arm's samples all fall on one side of the other's is 2/C(2n,n) - and with
+       k arms there are C(k,2) pairs that could have produced it. That product is a real p-value,
+       published rather than compared against a constant, and required below 1%.
+
+       FALSE POSITIVES, 300+ sweeps per cell, both arms drawn from ONE distribution and rounded onto
+       a 16.7 ms grid. This half is amplitude-independent, because it is combinatorial:
+
+           5 rounds, 2 arms    0.7%      (the design ceiling: 2/C(10,5) = 0.79%, just under the bar)
+           7 rounds, 2 arms    0.0%
+           9 rounds, 2/3/5     0.0%
+          15 rounds, 2 arms    0.0%
+
+       The spread measured zero in 100% of those sweeps, which is the finding that made this branch
+       matter: it is not a corner case, it is the normal case for this instrument.
+
+       POWER IS A DIFFERENT STORY AND DEPENDS ENTIRELY ON THE NOISE AMPLITUDE - which the first
+       version of this table did not say, quoting a single column beside the amplitude-independent
+       one as though both were properties of the design. Review caught it. 400 trials per cell,
+       9 rounds, 2 arms, noise uniform on +/-sigma:
+
+           sigma      1 step (16.7 ms)   2 steps (33.3 ms)   3 steps (50 ms)
+            1 ms           100%               100%               100%
+            2 ms             7%               100%               100%
+            4 ms             2%               100%               100%
+            8 ms             2%               100%               100%
+           16 ms             1%                92%               100%
+
+       Read the first column, not the last. A one-step effect is detectable ONLY when the machine is
+       quieter than the grid it is being measured on; past sigma = 2 ms it is gone, and no number of
+       rounds recovers it, because complete separation cannot happen when the arms overlap on the
+       same step. Two steps is reliable across every amplitude tested. That blind spot is a fact
+       about the instrument rather than a finding about the setting, and the verdict says so instead
+       of reporting a clean "no difference" the reader would bank.
+       --------------------------------------------------------------------------------------- */
+    let separation = null;
+    if (!(noise > 0)) {
+      const lo = this.lowerIsBetter ? best : worst, hi = this.lowerIsBetter ? worst : best;
+      const complete = Math.max(...lo.samples) < Math.min(...hi.samples);
+      /* log-space, because C(2n,n) overflows a double well before n gets interesting. */
+      const lnFact = (m) => { let s = 0; for (let i = 2; i <= m; i++) s += Math.log(i); return s; };
+      const lnC = (a, b) => lnFact(a) - lnFact(b) - lnFact(a - b);
+      const pPair = Math.exp(Math.log(2) + lnC(2 * nPerArm, nPerArm) * -1);
+      const pairs = (arms.length * (arms.length - 1)) / 2;
+      separation = { complete, p: +Math.min(1, pPair * pairs).toFixed(5), nPerArm, pairs };
+    }
+
+    const distinguishable = noise > 0
+      ? effect >= bar
+      : (separation.complete && separation.p <= 0.01);
 
     const receipt = {
       ok: true,
@@ -192,21 +258,39 @@ class Sweep {
                                median: +a.median.toFixed(3),
                                spread: a.spread != null ? +a.spread.toFixed(3) : null })),
       noiseFloor: +noise.toFixed(3),
-      /* Published so the verdict can be checked rather than believed. */
-      bar: +bar.toFixed(3),
+      /* WHICH TEST RAN, named rather than left to be inferred from which fields are null. The two
+         are different kinds of evidence and a reader is entitled to know which one they hold. */
+      testedBy: noise > 0 ? 'magnitude against the measured noise floor'
+                          : 'complete separation — the spread measured zero, so the instrument is ' +
+                            'quantized and a magnitude test has nothing to stand on',
+      bar: bar != null ? +bar.toFixed(3) : null,
+      separation,
       effect: +effect.toFixed(3),
       distinguishable,
       aborted: this.abort,
       /* The sentence a person reads. It has to be able to say "no difference", because that is the
          most common true answer and the one a settings page never gives you. */
-      verdict: !distinguishable
-        ? `No measurable difference on this machine. Best and worst differed by ${effect.toFixed(2)}, ` +
-          `and ${arms.length} arms at this noise level would produce a gap of ${bar.toFixed(2)} by ` +
-          `chance alone — so anything in this range is a matter of taste rather than of cost. ` +
-          `An effect around the size of the noise needs more rounds than ${rounds} to show up at all.`
-        : `${JSON.stringify(best.value)} measured best at ${best.median.toFixed(2)}, against ` +
-          `${worst.median.toFixed(2)} for ${JSON.stringify(worst.value)} — a gap of ${effect.toFixed(2)}, ` +
-          `against a chance-alone bar of ${bar.toFixed(2)} for ${arms.length} arms at this noise level.`,
+      verdict: noise > 0
+        ? (!distinguishable
+          ? `No measurable difference on this machine. Best and worst differed by ${effect.toFixed(2)}, ` +
+            `and ${arms.length} arms at this noise level would produce a gap of ${bar.toFixed(2)} by ` +
+            `chance alone — so anything in this range is a matter of taste rather than of cost. ` +
+            `An effect around the size of the noise needs more rounds than ${rounds} to show up at all.`
+          : `${JSON.stringify(best.value)} measured best at ${best.median.toFixed(2)}, against ` +
+            `${worst.median.toFixed(2)} for ${JSON.stringify(worst.value)} — a gap of ${effect.toFixed(2)}, ` +
+            `against a chance-alone bar of ${bar.toFixed(2)} for ${arms.length} arms at this noise level.`)
+        : (!distinguishable
+          ? `No measurable difference on this machine. Every arm's samples came out on the same few ` +
+            `values — the measurement is too coarse here to show a spread, so the only thing that ` +
+            `would count as evidence is one arm landing entirely clear of another, and none did. ` +
+            `A real but small difference would look exactly like this, which is a limit of the ` +
+            `instrument rather than a finding about the setting.`
+          : `${JSON.stringify(best.value)} measured best at ${best.median.toFixed(2)}, against ` +
+            `${worst.median.toFixed(2)} for ${JSON.stringify(worst.value)}. The measurement is too ` +
+            `coarse to show a spread, so this rests on separation instead: all ${separation.nPerArm} ` +
+            `samples of one landed clear of all ${separation.nPerArm} of the other, which happens by ` +
+            `chance about ${(separation.p * 100).toFixed(2)}% of the time across ${separation.pairs} ` +
+            `pair${separation.pairs === 1 ? '' : 's'} of arms.`),
       best: distinguishable ? best.value : null,
       /* The raw order is kept so a reader can see the interleaving actually happened and check for
          drift themselves. A receipt you cannot audit is a claim. */

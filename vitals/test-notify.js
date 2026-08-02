@@ -37,18 +37,145 @@ const finding = (id, sev, extra = {}) => ({
 });
 const diag = (...f) => ({ findings: f });
 
+(async () => {
+
+/* AWAITED, and it was not. This block sat outside the async wrapper below and passed its result
+   through a `return_()` helper whose comment claimed consider() "resolves synchronously via the
+   stub" — it does not; it is an async method and returns a pending promise either way. So the
+   assertion ran before consider() had done anything, and `outbox.length === 0` was true because
+   nothing had happened YET rather than because nothing was permitted to. The check would have
+   passed just as cheerfully with the severity gate deleted, which is the definition of a test that
+   proves nothing. */
 console.log('--- only CRITICAL may interrupt ---');
 {
   const { n, outbox, adv } = rig();
   n.capable = true;
   const warnOnly = diag(finding('warn1', 2), finding('note1', 1));
-  n.consider(warnOnly); adv(SUSTAIN_MS + 1000);
-  return_(n.consider(warnOnly));
+  await n.consider(warnOnly);
+  adv(SUSTAIN_MS + 1000);
+  await n.consider(warnOnly);
   check('warnings and notes never notify', outbox.length === 0, JSON.stringify(outbox));
-}
-function return_(p) { /* consider() is async; these cases resolve synchronously via the stub */ return p; }
 
-(async () => {
+  /* The control: the identical shape at critical severity DOES get through. Without this, the
+     check above is satisfied by a notifier that never sends anything at all. */
+  const { n: n2, outbox: out2, adv: adv2 } = rig();
+  n2.capable = true;
+  const crit = diag(finding('crit1', 3));
+  await n2.consider(crit);
+  adv2(SUSTAIN_MS + 1000);
+  await n2.consider(crit);
+  check('while the same thing at CRITICAL does notify — so the gate is a gate, not a mute',
+    out2.length === 1, JSON.stringify(out2));
+}
+
+console.log('\n--- A TRUTHY VALUE IS NOT A PATH: the bug that made this feature never work ---');
+{
+  /* THE REAL ONE, found by wiring up delivery evidence and then asking why every send failed.
+     bridge.js passed `psHost: PS_HOST`, and PS_HOST is `process.platform === 'win32'` — a boolean.
+     deliver() spawns psHost as a program, so Windows ran `spawn(true)`, Node coerced it to the
+     string "true", and every notification died with ENOENT. Six failures a minute for the entire
+     life of the feature, while the panel showed a healthy green channel — because probe() tested
+     the value for TRUTHINESS, and `true` is as truthy as it gets.
+     Asserted from the wrong side: the only thing that may be accepted is a string that exists. */
+  const boolHost = new Notifier({ psHost: true });
+  await boolHost.probe();
+  check('a boolean psHost is refused, not treated as a program name',
+    boolHost.capable === false, `capable=${boolHost.capable}`);
+  check('and status() names what was wrong rather than swallowing it',
+    /not a path/.test(boolHost.status().psHostProblem || ''), boolHost.status().psHostProblem);
+
+  const missing = new Notifier({ psHost: 'C:/definitely/not/here/powershell.exe' });
+  await missing.probe();
+  check('a psHost that does not exist on disk is refused too',
+    missing.capable === false && /was not found/.test(missing.status().psHostProblem || ''),
+    missing.status().psHostProblem);
+
+  /* And the control — without it the checks above are satisfied by a notifier that refuses
+     everything. On non-Windows the branch is unreachable, so it is skipped honestly rather than
+     asserted vacuously. */
+  if (process.platform === 'win32') {
+    const { PS } = require('./pshost');
+    const real = new Notifier({ psHost: PS });
+    await real.probe();
+    check('while the REAL resolved PowerShell path is accepted',
+      real.capable === true && !real.status().psHostProblem, `${PS} -> ${real.capable}`);
+  } else {
+    check('(the win32 psHost branch is unreachable on this platform, so it is not asserted)', true);
+  }
+}
+
+console.log('\n--- CONCURRENT PASSES: the guarantee was violated LIVE, by 899 ms ---');
+{
+  /* Review found two `sent` entries for the same finding 899 ms apart in this bridge's own log,
+     against a promise of "never two within 15 minutes" that the panel prints verbatim. The rules
+     were checked, then `await deliver()` ran for about a second, and `lastAnyAt` was only updated
+     afterwards — so two overlapping calls both read the old value and both passed the gap check.
+     Overlap is routine, not exotic: currentDiagnosis() calls consider() on a 30 s timer AND on
+     every /api/diagnose, /api/quarantine and ask-grounding request.
+
+     Reproduced with a SLOW deliver(), which is what makes the window real. Without the fix both
+     calls send; with it, exactly one does. */
+  const outbox = [];
+  let inFlight = 0, maxConcurrent = 0;
+  const n = new Notifier({
+    psHost: 'x',
+    deliver: async (t) => {
+      inFlight++; maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await new Promise((r) => setTimeout(r, 120));      // a real one-shot takes about a second
+      inFlight--;
+      outbox.push(t);
+      return true;
+    },
+  });
+  n.capable = true;
+  const d = diag(finding('spiral', 3));
+
+  await n.consider(d);
+  n.seen.get('spiral').firstAt -= SUSTAIN_MS + 1000;     // age it past the sustain bar
+  const [a, b] = await Promise.all([n.consider(d), n.consider(d)]);
+
+  check('two concurrent passes send exactly ONE notification, not two',
+    outbox.length === 1, `${outbox.length} sent`);
+  check('and only one of the two calls reports having sent anything',
+    (a.length + b.length) === 1, `${a.length} + ${b.length}`);
+  check('deliver() is never entered twice at once', maxConcurrent === 1, `peak ${maxConcurrent}`);
+  check('the withheld pass says WHY rather than silently returning empty',
+    n.log.some((x) => x.what === 'withheld' && /concurrent/.test(x.detail || '')),
+    JSON.stringify(n.log.slice(-3)));
+
+  /* THE TWO LOCKS ARE TESTED SEPARATELY, because the comment in notify.js claims they fail
+     differently — and a first cut of this suite proved only one of them. Reverting the claim to
+     AFTER the await (the original bug) left every check above green, because the in-flight flag was
+     doing all the work. A defence-in-depth claim needs one test per layer or it is one layer with
+     two names.
+
+     This drives `_consider` directly: the inner path, with the outer flag deliberately bypassed,
+     which is exactly the case the claim-before-await exists for. */
+  const outbox2 = [];
+  const n3 = new Notifier({
+    psHost: 'x',
+    deliver: async (t) => { await new Promise((r) => setTimeout(r, 120)); outbox2.push(t); return true; },
+  });
+  n3.capable = true;
+  const d3 = diag(finding('spiral', 3));
+  await n3.consider(d3);
+  n3.seen.get('spiral').firstAt -= SUSTAIN_MS + 1000;
+  await Promise.all([n3._consider(d3, {}), n3._consider(d3, {})]);
+  check('even with the in-flight lock BYPASSED, the gap still holds across the await',
+    outbox2.length === 1, `${outbox2.length} sent through the inner path`);
+
+  /* And the rollback: a failed send must not consume the gap, or one failure silences the next
+     fifteen minutes of real alerts. */
+  const n2 = new Notifier({ psHost: 'x', deliver: async () => false });
+  n2.capable = true;
+  const d2 = diag(finding('spiral', 3));
+  await n2.consider(d2);
+  n2.seen.get('spiral').firstAt -= SUSTAIN_MS + 1000;
+  await n2.consider(d2);
+  check('a FAILED send does not consume the minimum gap', n2.lastAnyAt === 0, `lastAnyAt=${n2.lastAnyAt}`);
+  check('nor the per-finding cooldown', n2.seen.get('spiral').lastAlertAt === 0,
+    `lastAlertAt=${n2.seen.get('spiral').lastAlertAt}`);
+}
 
 console.log('\n--- a finding must HOLD before it may interrupt ---');
 {

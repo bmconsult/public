@@ -60,10 +60,42 @@ const REFS = {
     unit: 'MB',
     method: {
       win32: 'PerformanceCounter “Memory\\Available MBytes” vs GlobalMemoryStatusEx (via os.freemem)',
-      linux: '/proc/meminfo MemAvailable vs sysinfo(2) (via os.freemem)',
+      linux: '/proc/meminfo MemAvailable vs os.freemem — SEE BELOW, the reference route is unproven',
       darwin: 'vm_stat page arithmetic vs host_statistics64 (via os.freemem)',
     },
+    /* linux DEMOTED TO null: NOT ESTABLISHED, which is a third state and not a synonym for false.
+     *
+     * This declaration used to say `sysinfo(2)`, which would make it a genuinely separate route
+     * from the collector's /proc/meminfo read. But that is documentation, not a syscall - and the
+     * darwin leg one row down was wrong in exactly that way, so the same claim on the same row
+     * deserves the same scepticism rather than the benefit of the doubt. In libuv >= 1.45 (this
+     * Node ships 1.49.2) `uv_get_free_memory()` reads /proc/meminfo `MemFree:` first and only falls
+     * back to sysinfo(2). If that holds here, BOTH SIDES ARE READING ONE FILE - different fields,
+     * so not a function agreeing with itself, but a long way from two routes to the kernel.
+     *
+     * Not verified either way: WSL is available on the reference machine but has no Node, and
+     * installing one to settle it is a change to the owner's machine rather than a measurement of
+     * it. The CI job on real ubuntu-22.04/24.04 runners answers it byte-exactly:
+     *
+     *   node -e 'const fs=require("fs"),os=require("os");
+     *     const f=+/MemFree:\s+(\d+)/.exec(fs.readFileSync("/proc/meminfo","utf8"))[1]*1024;
+     *     console.log("identical?", os.freemem()===f)'
+     *
+     * Byte-exact equality proves it reads the file and `independenceVerified.linux` goes to false;
+     * a difference proves a separate route and it goes to true.
+     *
+     * `independent` STAYS TRUE HERE, deliberately, and the two flags do different jobs: this one
+     * decides whether the comparison RUNS, and the comparison is worth running whatever the answer
+     * turns out to be - if both sides do read one file the agreement will be near-perfect, which is
+     * itself the evidence. What must not happen is the LABEL going out unqualified, so the doubt
+     * lives in `independenceVerified` and travels with every payload rather than sitting in a
+     * comment. Turning the comparison off to express uncertainty would have thrown away the best
+     * check on the platform to make a point about a word. */
     independent: { win32: true, linux: true, darwin: true },
+    /* Whether that `independent: true` was established by READING BOTH SOURCES, or assumed from a
+       method string. null = assumed, not checked. This distinction is the entire lesson of the
+       darwin fix two rows down. */
+    independenceVerified: { win32: true, linux: null, darwin: true },
     /* THE COMPARISON IS PER-PLATFORM, BECAUSE freemem() IS NOT ONE QUANTITY.
      *
      * The first cut treated os.freemem() as FREE PAGES everywhere, and compared it as a bound:
@@ -135,8 +167,16 @@ const REFS = {
       linux: 'collector uptime vs /proc/uptime (via os.uptime)',
       darwin: 'collector uptime vs sysctl kern.boottime (via os.uptime)',
     },
-    /* Linux libuv reads /proc/uptime, which is where the collector gets it too. Declared. */
-    independent: { win32: true, linux: false, darwin: true },
+    /* WHAT COUNTS AS AN INDEPENDENT PATH IS THE SYSCALL, NOT THE DOCUMENTATION.
+       Linux libuv reads /proc/uptime, which is where the collector gets it too.
+       macOS was declared independent on the strength of the method string below saying "sysctl
+       kern.boottime" - which is what libuv calls internally, but the collector reaches it the same
+       way: `collect/darwin.js:612` is `os.uptime()`, and so is the check. Two calls to one function
+       agreeing is not a cross-check, and this one duly reported "median 107 s against a 240 s
+       tolerance" on live CI hardware, which read as evidence and was arithmetic.
+       Corrected in review. The rule this file exists for applies hardest to this file: a comparison
+       is independent when the two sides reach the kernel by different routes, and nothing else. */
+    independent: { win32: true, linux: false, darwin: false },
     compare: 'delta',
     /* THE BAND IS SET BY THE COLLECTOR'S OWN QUANTISATION, not by taste.
        `tick.up` is reported in HOURS rounded to one decimal, so two sources that agree perfectly
@@ -253,6 +293,17 @@ class SelfCheck {
       label: r.label,
       unit: r.unit,
       independent: !!r.independent[this.plat],
+      /* true = both routes were read and confirmed different. null = ASSUMED from the method
+         description and never checked, which is how the darwin uptime leg spent a release claiming
+         a cross-check it was not performing.
+         THE ABSENT-RECORD DEFAULT WAS `true`, AND THAT IS THE SAME BUG ONE LEVEL UP. Rows with no
+         `independenceVerified` map — cpuPct, uptimeSec — were reported as "both routes were read
+         and confirmed different" on the strength of nothing at all. A missing record is the very
+         definition of not-checked, so it defaults to null, in the module whose entire subject is
+         that distinction. Caught in review; the split was three days old and already leaking. */
+      independenceVerified: r.independenceVerified
+        ? (r.independenceVerified[this.plat] !== undefined ? r.independenceVerified[this.plat] : null)
+        : null,
       method: r.method[this.plat] || 'no reference on this platform',
       compare: per(r.compare, this.plat),
       tolerance: per(r.medianTolerance, this.plat),
@@ -354,6 +405,11 @@ class SelfCheck {
       const st = this.stats[p.key];
       const row = {
         key: p.key, label: p.label, method: p.method, independent: p.independent,
+        /* CARRIED ONTO THE WIRE, because plan() has no other caller and this distinction was dying
+           in a function nobody invoked — the same "the honesty never reached a reader" failure that
+           `capableMeans` had. null = the independence claim was ASSUMED from the method description
+           and never checked against the actual syscall on both sides. */
+        independenceVerified: p.independenceVerified,
         compare: p.compare, unit: p.unit,
         samples: st ? st.n : 0,
         last: st ? st.last : null,

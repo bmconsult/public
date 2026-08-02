@@ -59,6 +59,25 @@ function pastText(p) {
 }
 
 /**
+ * THE SYSTEM VOLUME, cross-platform, and NULL when there is not one.
+ *
+ * EXPORTED because it was being re-derived per caller and the copies drifted. outcomes.js carried
+ * the original one-liner - `vols.find(v => v.id === 'C:')` - which matches nothing on Linux or
+ * macOS, where the root volume is '/'. Its ledger therefore recorded `freeGB: undefined` for every
+ * entry on those platforms while looking exactly like a populated record. One selector, one place.
+ */
+function systemVolume(tick) {
+  const v = (tick && tick.disk && tick.disk.vols) || [];
+  return v.find((x) => x.id === 'C:')
+      || v.find((x) => x.id === '/')
+      /* Neither name present (a Windows install on D:, an unusual mount layout): the biggest
+         volume is the best available guess, and it is a guess about WHICH disk, not about its
+         numbers - those are still measured. */
+      || v.slice().sort((a, b) => (b.sizeGB || 0) - (a.sizeGB || 0))[0]
+      || null;
+}
+
+/**
  * @param tick   latest metrics sample
  * @param hist   History instance
  * @param extra  { growth?, snapshot?, startupCount?, outcomes?, maint?, trend? }
@@ -76,16 +95,7 @@ function diagnose(tick, hist, extra = {}) {
      healthy disk on a machine whose disk is full, and the absence of a finding reads as an all-clear.
      history.js:59 already selects the root volume properly. Same selection here, and null instead of
      zeros so a missing volume DISABLES the disk rules rather than answering on their behalf. */
-  const vol = (() => {
-    const v = (tick.disk && tick.disk.vols) || [];
-    return v.find((x) => x.id === 'C:')
-        || v.find((x) => x.id === '/')
-        /* Neither name present (a Windows install on D:, an unusual mount layout): the biggest
-           volume is the best available guess, and it is a guess about WHICH disk, not about its
-           numbers - those are still measured. */
-        || v.slice().sort((a, b) => (b.sizeGB || 0) - (a.sizeGB || 0))[0]
-        || null;
-  })();
+  const vol = systemVolume(tick);
   /* The label every disk finding quotes. Hard-coding "C:" in the prose was the same Windows
      assumption one layer up: a finding that says "C: is 4% free" on a Mac is wrong twice. */
   const volId = vol ? vol.id : null;
@@ -158,7 +168,11 @@ function diagnose(tick, hist, extra = {}) {
           { v: `${tick.mem.pct}%`,               l: 'RAM used' },
           { v: `${gb(tick.mem.committedMB)} GB`, l: `committed of ${gb(totalRamMB)}` },
           { v: `${(100 - vol.pct).toFixed(1)}%`, l: `${volId} free` },
-          { v: faulting ? `${hist.stat('hardFaults', 120).avg}/s` : `${tick.mem.pagesSec ?? 0}/s`, l: 'hard faults' },
+          /* `?? 0` printed "0/s" for a platform that does not report hard faults at all — the
+              founding lesson of this codebase, in display form: a plausible zero ends the question
+              a blank would have started. An em dash is the honest glyph for "not measured". */
+          { v: faulting ? `${hist.stat('hardFaults', 120).avg}/s`
+                        : (tick.mem.pagesSec != null ? `${tick.mem.pagesSec}/s` : '—'), l: 'hard faults' },
         ],
       },
     });
@@ -617,6 +631,9 @@ function diagnose(tick, hist, extra = {}) {
    * printing a microsecond figure derived from it would not be, and this engine would rather be
    * quiet than confidently wrong about a unit. */
   if (hw && hw.irq && typeof hw.irq.dpcPct === 'number') {
+    /* The SUM is legitimate — an absent interrupt figure contributes nothing to a total and the
+        rule below still has dpcPct, which is the load-bearing half. Kept, and named, so the next
+        reader does not "fix" it into a null-propagating expression that disables the rule. */
     const load = hw.irq.dpcPct + (hw.irq.intPct || 0);
     if (load >= 10) {
       add({
@@ -626,7 +643,10 @@ function diagnose(tick, hist, extra = {}) {
                  `as stutter and dropped audio rather than as a busy CPU. It is almost always one ` +
                  `driver — commonly network, storage or a virtualisation filter.`,
         evidence: [
-          `DPC ${hw.irq.dpcPct.toFixed(2)}% · interrupts ${(hw.irq.intPct || 0).toFixed(2)}%`,
+          /* But the EVIDENCE STRING must not invent one. "interrupts 0.00%" reads as a measured
+              floor; the honest rendering of an unread counter is to leave it out of the sentence. */
+          `DPC ${hw.irq.dpcPct.toFixed(2)}%` +
+            (hw.irq.intPct != null ? ` · interrupts ${hw.irq.intPct.toFixed(2)}%` : ' · interrupts not measured'),
           'time share, not latency — worst-case DPC latency needs a kernel trace and is not measured here',
         ],
         action: 'Update network and storage drivers first; they account for most of this.',
@@ -654,4 +674,4 @@ function diagnose(tick, hist, extra = {}) {
   };
 }
 
-module.exports = { diagnose };
+module.exports = { diagnose, systemVolume };

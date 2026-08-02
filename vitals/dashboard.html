@@ -195,6 +195,27 @@ body{
   font-variant-numeric:tabular-nums; -webkit-font-smoothing:antialiased;
   user-select:none; cursor:default;
 }
+/* ---- TEXT SELECTION (2026-08-01, owner asked; no toggle, because it does not go either way) ----
+   `user-select:none` on <body> is the right default for a window that behaves like an application:
+   it stops a stray drag painting the chrome blue, and it is why dragging the panel by its edge
+   feels native rather than like a web page.
+   But this is a MEASUREMENT INSTRUMENT. Its whole output is numbers, paths, adapter names, error
+   strings and log lines — the exact things a person needs to paste into a search box, a bug report
+   or a message to somebody else. Withholding that is not app-feel, it is making the reader retype
+   a path by hand from a screen that already knows it.
+   So the rule is by ROLE, not by preference, which is why it needs no setting: DATA is selectable,
+   CHROME is not. Everything inside a page selects and shows an I-beam so the affordance is
+   discoverable; anything that is a control, a canvas or a drag surface opts back out, because a
+   control that selects when you press it feels broken in a way no setting would fix.
+   (A toggle was offered and declined: a switch here would only ever be "make the app worse", and a
+   preference whose wrong setting has no use is a decision the software should have made.) */
+.page, .card, .hd, .sfx-foot{ user-select:text; -webkit-user-select:text; cursor:auto }
+.page button, .page label, .page input, .page select, .page canvas, .page [data-go],
+.page .ab, .page .rb, .page .cm, .page .tile, .page .lg-row.x, .page .sfx-h,
+button, .rb, #grip, #wctl{ user-select:none; -webkit-user-select:none }
+/* The cursor still has to tell the truth about what a thing does: a button says "press me", a
+   readout says "you may take this". */
+.page button, .page .ab, .page [data-go], .page .tile, .page label{ cursor:pointer }
 /* width/height are REQUIRED here: <canvas> is a replaced element, so `inset:0` alone does not
    stretch it — it falls back to its intrinsic (attribute) size. Without these the JS sizer reads
    its own output and spirals toward zero. */
@@ -251,6 +272,18 @@ body.docked #shell .rb,body.docked #shell [data-go]{cursor:pointer}
 /* With the row clamped above, a short window height-constrains the rail. Buttons compress evenly
    toward a 30px floor instead of overflowing invisibly — no scrollbar (owner's no-scroll law). */
 #rail .rb{flex:0 1 44px;height:auto;min-height:30px}
+/* ...BUT A FLOOR IS ONLY A FIX UNTIL THE ITEM COUNT REACHES IT (2026-08-01, measured).
+   The compression above was correct and had already been overtaken: at 22 buttons the floor
+   itself is 22×30 + 21 gaps + padding = 749px, so every window shorter than that overflowed a
+   rail with `overflow:visible` inside a clamped grid row — nothing scrolled, and the last items
+   simply left the viewport. MEASURED at 1280×700: the rail ran 37px past the bottom and the ASK
+   button was unreachable. Not a regression in the rule; the rule had a constant in it and the
+   constant expired.
+   The gap and the padding must compress too, because at this count they are 20% of the stack.
+   Verified by measurement at 620 / 700 / 820 / 1000 with every button inside the viewport. */
+@media (max-height:840px){ #rail{gap:2px;padding:8px 0} #rail .rb{min-height:27px} }
+@media (max-height:740px){ #rail{gap:1px;padding:6px 0} #rail .rb{min-height:24px} }
+@media (max-height:640px){ #rail{gap:1px;padding:4px 0} #rail .rb{min-height:21px} }
 .rb{
   width:44px;height:44px;border-radius:9px;display:grid;place-items:center;cursor:pointer;
   color:var(--ink-3);transition:background .18s,color .18s,transform .18s;position:relative;
@@ -725,6 +758,53 @@ tr:hover td{background:rgba(var(--fg),.025);color:var(--ink)}
 .dgx-foot{margin-top:auto;padding:10px 0 8px;border-top:1px solid var(--line-2);
   font-size:10.5px;color:var(--ink-3);line-height:1.6;max-width:1040px;opacity:.85}
 .dgx-foot b{color:var(--ink-2)}
+
+/* B16 relationships. Same visual grammar as the findings rail above it - a left spine carrying the
+   severity colour - because it answers the same kind of question, one level up. Quiet by default:
+   the common answer is "nothing cleared the bar", and that must not look like a warning. */
+.rel-card{margin-top:14px}
+/* In the rail the card is one more entry in a narrow scrolling column, not a page-width card: no
+   panel chrome, no min-width, and the header collapses onto two lines rather than pushing the
+   column wider. */
+.rel-card.in-rail{margin:18px 0 4px;padding-top:12px;border-top:1px solid var(--line-2);background:none}
+.rel-card.in-rail .hd{display:block;margin-bottom:2px}
+.rel-card.in-rail .hd h2{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+.rel-card.in-rail .hd .sub{display:block;margin:2px 0 0;font-size:9.5px}
+.rel-card.in-rail .rel-f{font-size:9.5px}
+.rel-card.in-rail .rel-m,.rel-card.in-rail .rel-n{font-size:10px}
+.rel-card .hd .sub{font-size:10.5px;color:var(--ink-3);letter-spacing:.04em;margin-left:10px}
+.rel{position:relative;padding:0 0 0 14px;margin:12px 0 14px}
+.rel::before{content:'';position:absolute;left:0;top:3px;bottom:3px;width:2px;border-radius:2px;
+  background:var(--line-2)}
+.rel.hit::before{background:var(--net);box-shadow:0 0 calc(9px*var(--sgk)) color-mix(in srgb, var(--net) 55%, transparent)}
+.rel-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.rel-h b{font-size:12px;font-weight:500;color:var(--ink);line-height:1.45}
+.rel-r{font-size:10px;color:var(--ink-3);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.rel-b{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:1px 6px;border-radius:3px;
+  border:1px solid var(--line-2);color:var(--ink-3);cursor:help}
+/* --ok/--warn are HEX in this theme, not the R,G,B triplets --fg and --t3 are, so `rgb(var(--ok))`
+   parsed as garbage and silently inherited the body ink - both badges came out the same colour and
+   the distinction the badge exists to draw was invisible. Caught by reading getComputedStyle rather
+   than by looking at it, which is the only way this class of failure shows up: an invalid custom
+   property does not throw, it just quietly does nothing. color-mix gives the translucent border
+   without needing a triplet. */
+.rel-b.ok{border-color:color-mix(in srgb, var(--ok) 45%, transparent);color:var(--ok)}
+.rel-b.warn{border-color:color-mix(in srgb, var(--warn) 45%, transparent);color:var(--warn)}
+.rel-w{font-size:10.5px;color:var(--ink-3);line-height:1.55;margin-top:3px}
+.rel-m,.rel-n{font-size:10.5px;line-height:1.55;margin-top:4px;color:var(--ink-3)}
+.rel-m em,.rel-n em{font-style:normal;text-transform:uppercase;letter-spacing:.07em;font-size:9px;
+  color:var(--ink-3);opacity:.75;margin-right:6px}
+.rel-n{opacity:.9}
+.rel-n em{color:var(--warn);opacity:1}
+.rel-rest{margin-top:8px;border-top:1px solid var(--line-2);padding-top:8px}
+.rel-rest summary{font-size:10.5px;color:var(--ink-3);cursor:pointer;letter-spacing:.03em;
+  list-style:none;opacity:.85}
+.rel-rest summary::-webkit-details-marker{display:none}
+.rel-rest summary::before{content:'▸ ';font-size:9px}
+.rel-rest[open] summary::before{content:'▾ '}
+.rel-f{margin-top:10px;padding-top:9px;border-top:1px solid var(--line-2);
+  font-size:10.5px;color:var(--ink-3);line-height:1.6;opacity:.85;max-width:1040px}
+.rel-f b{color:var(--ink-2)}
 .grow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2)}
 .grow .gp{flex:1;font-size:11.5px;word-break:break-all}
 .grow .gb2{width:150px;height:6px;background:rgba(var(--fg),.06);border-radius:3px;position:relative;overflow:hidden}
@@ -1078,7 +1158,9 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    That was the owner's "little bit of scroll before it should". Clamping the container is what makes
    the shrink rules load-bearing; the deep rail then scrolls inside itself. Same shape as the rail
    overflow bug: an unclamped track cannot be fixed by tuning what sits in it. */
-.sfx{position:relative;height:100%;padding:6px 8px 0 14px;display:flex;flex-direction:column;--vc:var(--ok)}
+/* Padding lives on the page now (see #p-self above), so this inner wrapper adds none — two
+   containers each contributing an offset is what put this header 12px off its siblings. */
+.sfx{position:relative;height:100%;padding:0;display:flex;flex-direction:column;--vc:var(--ok)}
 .sfx.warn{--vc:var(--warn)} .sfx.crit{--vc:var(--crit)}
 .sfx-meta{display:flex;align-items:center;gap:12px;font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
 .sfx-main{display:flex;gap:42px;align-items:stretch;margin-top:16px;flex:1;min-height:0}
@@ -1138,7 +1220,27 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
 .sfc .sfc-n{font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums;line-height:1.45}
 .sfc .sfc-m{display:block;font-size:9.5px;color:var(--ink-3);line-height:1.4;margin-top:5px;
   overflow-wrap:anywhere}
+/* The "assumed, not confirmed" qualifier on a cross-check. Deliberately quiet: it is a caveat on a
+   working check, not a warning about a broken one. */
+.sfc .sfc-as{display:block;margin-top:4px;font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);opacity:.75;cursor:help}
 .sfc.off{opacity:.72}
+
+/* AI access. An open grant and a pending ask are the two states worth colour; everything else on
+   this block is deliberately quiet, because "nothing is being asked for" is the normal case and
+   must not look like an alert. */
+.aig-on{border-left:2px solid var(--warn);padding-left:9px}
+.aig-on b{color:var(--warn)!important}
+.aig-ask{border-left:2px solid var(--net);padding-left:9px}
+.aig-ask b{color:var(--net)!important}
+.aig-act{display:flex;gap:6px;align-items:center;margin-top:7px;flex-wrap:wrap}
+.aib{font:inherit;font-size:10.5px;color:var(--ink-2);cursor:pointer;background:var(--gl-1);
+  border:1px solid var(--line-2);border-radius:999px;padding:3px 11px}
+.aib.go{color:var(--ink);border-color:color-mix(in srgb, var(--net) 55%, transparent)}
+.aib:disabled{opacity:.55;cursor:default}
+.aip{font:inherit;font-size:10.5px;color:var(--ink);background:rgba(var(--fg),.05);
+  border:1px solid var(--line-2);border-radius:6px;padding:3px 8px;width:120px}
+.aig-raw{font-style:normal;color:var(--warn);font-size:9.5px;letter-spacing:.04em}
 
 /* ---------- B5 + B6: WORKLOADS ----------
    What each program costs, in percentiles rather than an average, and whether this run differs
@@ -1216,8 +1318,29 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
 .pulse-wrap{position:relative;border:1px solid var(--line-2);border-radius:10px;overflow:hidden;
   background:var(--gl-1);height:260px}
 .pulse-wrap canvas{display:block;width:100%;height:100%}
-.pulse-cap{position:absolute;left:12px;bottom:9px;font-size:9.5px;letter-spacing:.05em;
-  color:var(--ink-3);pointer-events:none}
+/* The caption carries the thermal read's off switch, because that is the one part of this strip
+   with a price worth naming and the control belongs on the claim it governs. */
+/* A CONTROL HAS TO LOOK LIKE ONE. The first version was underlined text at the tail of a long
+   low-contrast caption, over a bright moving field — the owner asked for the desktop read, was
+   given it, and then could not find the switch: "they seem to be doing the same thing?" A feature
+   nobody can turn on has not shipped. So these are chips: their own surface, their own border,
+   and enough contrast to survive being drawn over a particle field. */
+.pulse-sw{font:inherit;font-size:9.5px;letter-spacing:.04em;cursor:pointer;pointer-events:auto;
+  background:var(--tip-bg);color:var(--ink);border:1px solid rgba(var(--fg),.30);
+  border-radius:999px;padding:3px 9px;margin-left:7px;white-space:nowrap;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transition:all .15s}
+.pulse-sw:hover{background:rgba(var(--acc2),.35);border-color:rgba(var(--acc2),.7)}
+/* The one that turns ON a screen read is marked, because it is the only control on this page that
+   changes what the software looks at. */
+.pulse-sw[data-thermal="screen"]{border-color:rgba(var(--warn-r,214,158,46),.8)}
+/* The caption sits ON the field it describes, and the field is at its brightest exactly when there
+   is most to say. --ink-3 over that is unreadable — legible in a mockup, gone in use. Its own
+   scrim, so the text keeps its contrast whatever the particles are doing underneath. */
+.pulse-cap{position:absolute;left:8px;right:8px;bottom:6px;font-size:9.5px;letter-spacing:.05em;
+  color:var(--ink-2);pointer-events:none;display:flex;align-items:center;flex-wrap:wrap;gap:2px 0;
+  padding:5px 8px;border-radius:7px;background:var(--tip-bg);opacity:.94;
+  backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px)}
+.pulse-cap b{color:var(--ink)}
 @media (max-height:760px){ .pulse-wrap{height:180px} }
 
 /* ---------- B19: the growth treemap ----------
@@ -1344,16 +1467,50 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    independently scrollable"). Cost-by-mode is a short live readout that never grows — pinned, always
    visible, never scrolls away. Receipts and levers are append-only prose that WILL keep growing, so
    each gets its own scroll and neither can push the other out of view. Each region keeps its section
-   label pinned above it. */
+   label pinned above it.
+
+   AND THEN IT GREW TO SIX (2026-08-01, owner: "is there more under here that doesnt show?").
+   The design above is right for two regions and degrades silently at six: `flex:1 1 0` divides the
+   column equally, so every added section shrinks ALL of them, and once they hit the 56px floor
+   together the surplus goes behind a zero-width scrollbar. No overflow, no error, no scrollbar —
+   just six boxes quietly showing their first two lines. MEASURED at 1280x820 before the fix:
+   2,132px of content in the rail, 336px of it reachable. The dev-mode toggle was inside the 446px
+   that `this install · what it can do` was hiding.
+   This is principle G (an implicit `auto` row is a min-content ratchet) with the sign flipped: an
+   equal-share flex track is a min-height ratchet, and it fails in the direction you cannot see.
+   THE RULE: a layout that divides space equally must be re-audited every time it gains a claimant.
+   Now an accordion — one open, and the open one takes every pixel the headers do not. */
 .sfx-rail{width:322px;flex:none;border-left:1px solid var(--line-2);padding:2px 0 2px 24px;align-self:stretch;
   display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .sfx-rail>.rl{flex:none}
 .sfx-fix{flex:none}                                   /* cost by mode — pinned, it does not grow */
-.sfx-scr{flex:1 1 0;min-height:56px;overflow-y:auto;
+.sfx-scr{flex:1 1 auto;min-height:0;overflow-y:auto;
   scrollbar-width:none;-ms-overflow-style:none;overscroll-behavior:contain}
+.sfx-scr[hidden]{display:none}
 .sfx-scr::-webkit-scrollbar{width:0;height:0}
+/* Even with a whole rail to itself a section can outrun the space (the capability list is 623px).
+   The old failure was silent, so the new one must not be: the last line fades under a gradient,
+   which is the one cue a hidden scrollbar cannot give you. */
+.sfx-scr.more{-webkit-mask-image:linear-gradient(#000 calc(100% - 30px),transparent);
+  mask-image:linear-gradient(#000 calc(100% - 30px),transparent)}
 .sfx-rail .rl{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);font-weight:700;margin:0 0 10px}
 .sfx-rail .rl:not(:first-child){margin-top:16px}
+/* A collapsed header still carries its section's verdict, so the rail reads as a summary of six
+   things rather than a stack of lids — closing a section costs you the detail, never the finding. */
+.sfx-rail .rl.sfx-h{display:flex;align-items:baseline;gap:8px;cursor:pointer;user-select:none;
+  margin:0;padding:6px 0 5px;transition:color .12s}
+.sfx-rail .rl.sfx-h:not(:first-child){margin-top:0}
+.sfx-rail .rl.sfx-h+.sfx-scr{margin-top:6px}
+.sfx-rail .rl.sfx-h:hover,.sfx-rail .rl.sfx-h:focus-visible{color:var(--ink-2);outline:none}
+.sfx-rail .rl.sfx-h::before{content:'';flex:none;align-self:center;width:5px;height:5px;
+  border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;
+  transform:rotate(-45deg);opacity:.55;transition:transform .16s ease,opacity .16s}
+.sfx-rail .rl.sfx-h.on{color:var(--ink);padding-bottom:0}
+.sfx-rail .rl.sfx-h.on::before{transform:rotate(45deg);opacity:.9}
+.sfx-rail .rl.sfx-h>span{margin-left:auto;flex:none;text-align:right}
+.sfx-n{margin-left:auto;flex:none;font-size:9px;font-weight:600;letter-spacing:.06em;
+  color:var(--ink-3);opacity:.75;font-variant-numeric:tabular-nums;font-style:normal}
+.sfx-rail .rl.sfx-h>span+.sfx-n,.sfx-rail .rl.sfx-h>.sfx-n+span{margin-left:8px}
 .sfm{display:flex;align-items:baseline;gap:8px;font-size:11px;color:var(--ink-2);padding:2px 0;font-variant-numeric:tabular-nums}
 .sfm b{color:var(--ink);font-weight:600;width:98px;flex:none;font-size:11px}
 .sfm span{color:var(--ink-3);font-size:9.5px;margin-left:auto}
@@ -1372,10 +1529,44 @@ body.unverified-host .capwarn{display:inline-flex;align-items:center;gap:5px;
    mark a measured event. Both hairline-zoned, no cards (the SYS grammar). */
 .xhead{display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line);padding-bottom:9px;flex:none}
 .xhead b{font-size:13px;letter-spacing:.3em;font-weight:600;color:var(--ink)}
+/* ---- THE TITLE IS THE SWITCHER (2026-08-02, owner: "we could do it without taking any space by
+   simply having the toggles where the names are at the top") ----
+   FOOTPRINT, RIG and FX are three views of the same subject — the instrument itself: what it
+   costs, how it is driven, how it looks — and they were three rail buttons on a rail that had
+   already outgrown short windows at 23. Folding them into one costs no vertical space at all,
+   because every one of these pages already spends a row on its own name.
+   The active segment renders EXACTLY as the old <b> title did: same size, weight and tracking. So
+   on arrival the page looks unchanged and the other two read as dimmed siblings of the title —
+   which is the affordance doing its own explaining. Anything that looked like a tab strip would
+   have cost the row this design exists to save. */
+.vsw{display:flex;align-items:baseline;gap:14px;flex:none}
+.vsw button{font:inherit;font-size:13px;letter-spacing:.3em;font-weight:600;background:none;
+  border:0;padding:0;cursor:pointer;color:var(--ink-3);opacity:.55;transition:opacity .15s,color .15s}
+.vsw button:hover{opacity:.85;color:var(--ink-2)}
+.vsw button.on{color:var(--ink);opacity:1;cursor:default}
+/* ONE CONTROL, ONE SIZE (owner, 2026-08-02: "lets have the 3 toggles all have the same style...
+   lets go with the larger toggles"). The first version sized the switcher to whatever header it
+   landed in, so FOOTPRINT got 9.5px segments beside 9.5px uppercase prose while RIG and FX got
+   13px segments beside 10px prose — the same control reading as two different controls depending
+   which of its own three views you were on. A switcher that changes size as you use it teaches
+   you it is decoration.
+   So the segments are 13px everywhere and the FOOTPRINT header's own meta line steps down to the
+   tagline treatment RIG and FX already use, rather than the switcher stepping down to it. */
+.sfx-meta{text-transform:none;letter-spacing:0;font-weight:400}
+.sfx-meta>.vsw+span{font-size:10px;color:var(--ink-3);letter-spacing:0;text-transform:none;
+  font-weight:400;align-self:baseline}
 .xhead .tag0{color:var(--ink-3);font-size:10px}
 .xhead .xkpi{margin-left:auto;display:flex;gap:16px;font-size:9px;color:var(--ink-3);letter-spacing:.12em;text-transform:uppercase}
 .xhead .xkpi b{color:var(--ink);font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;text-transform:none;font-size:10.5px}
-#p-rig,#p-fx{display:flex;flex-direction:column;padding:14px 18px 10px}
+/* THE THREE DESK PAGES SHARE ONE FRAME, and this is a correctness fix rather than tidiness.
+   They are three views behind ONE switcher, and that switcher lives in their headers — so when the
+   pages had different padding (FOOTPRINT took .page's 16px plus .sfx's own 6/14, RIG and FX took
+   14/18) the control MOVED as you used it: measured 12px right and 8px lower on FOOTPRINT.
+   A persistent control that jumps when you press it is the one thing a persistent control must not
+   do; you end up aiming at where it used to be. Owner found it immediately.
+   Fixed at the frame rather than by nudging the header with negative margins, because a
+   compensating offset is only correct until either side's padding changes again. */
+#p-rig,#p-fx,#p-self{display:flex;flex-direction:column;padding:14px 18px 10px}
 .xgrid{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;align-content:start}
 /* Each column owns its scroll (2026-07-29). The bug the owner saw as "content on top of content":
    .xgrid is flex:1 + min-height:0 inside a flex-column page, so it is squeezed below its content
@@ -1663,6 +1854,104 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
 #p-led .lg-id{display:flex;align-items:baseline;gap:7px;min-width:0}
 #p-led .lg-id i{width:7px;height:7px;border-radius:2px;flex:none;align-self:center}
 #p-led .lg-id span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- AUTOMATIONS ----
+   The card carries a STATE STRIPE down its left edge rather than a coloured badge, because the
+   distinction that matters here is not a category, it is how far along the earning is: a reader
+   scanning the page should be able to see which of these are live without reading a word.
+   Green = acting. Amber = asks first. Neutral = still earning. */
+#p-auto .ag{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+#p-auto .ac{position:relative;padding:13px 15px 13px 17px;border:1px solid var(--line-2);
+  border-radius:9px;background:var(--gl-1);display:flex;flex-direction:column;gap:9px}
+#p-auto .ac::before{content:'';position:absolute;left:0;top:11px;bottom:11px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--ink-3);opacity:.35}
+#p-auto .ac.live::before{background:rgb(var(--ok-r,52,199,123));opacity:1}
+#p-auto .ac.asks::before{background:var(--warn);opacity:1}
+#p-auto .ah{display:flex;align-items:baseline;gap:9px}
+#p-auto .ah b{font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.3}
+#p-auto .st{margin-left:auto;flex:none;font-size:9px;letter-spacing:.11em;text-transform:uppercase;
+  font-weight:700;color:var(--ink-3);white-space:nowrap}
+#p-auto .ac.live .st{color:rgb(var(--ok-r,52,199,123))}
+#p-auto .ac.asks .st{color:var(--warn)}
+/* THE GATES. Each states its own number, met or not — a progress bar would show how far along it
+   is while hiding what it is measuring, and what it is measuring is the entire argument.
+   NOT A CIRCLE (owner, 2026-08-01: "your bullets look like toggles"). A ringed dot IS a radio
+   button; drawing status with a control's glyph invites a click that does nothing, and on a page
+   whose whole subject is what you have switched on, that ambiguity is the worst one available.
+   Met = a tick. Unmet = a dash. Neither is a shape anything on this machine lets you press. */
+#p-auto .gt{display:flex;flex-direction:column;gap:4px;font-size:10.5px}
+#p-auto .gt div{display:flex;gap:8px;align-items:baseline;color:var(--ink-3);line-height:1.4}
+#p-auto .gt i{flex:none;width:10px;height:10px;align-self:center;position:relative;opacity:.55}
+/* unmet: a dash, sitting on the same baseline the tick will occupy so nothing shifts when it lights */
+#p-auto .gt i::before{content:'';position:absolute;left:0;right:2px;top:4px;height:1.5px;
+  border-radius:1px;background:var(--ink-3)}
+#p-auto .gt div.ok{color:var(--ink-2)}
+#p-auto .gt div.ok i{opacity:1}
+#p-auto .gt div.ok i::before{display:none}
+#p-auto .gt div.ok i::after{content:'';position:absolute;left:1px;top:-1px;width:5px;height:9px;
+  border:1.8px solid rgb(var(--ok-r,52,199,123));border-top:0;border-left:0;transform:rotate(41deg)}
+#p-auto .bl{font-size:10px;color:var(--ink-3);line-height:1.5;opacity:.9}
+#p-auto .bl b{color:var(--ink-2);font-weight:600}
+#p-auto .arow{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:3px}
+#p-auto .ab{font:inherit;font-size:11px;cursor:pointer;background:var(--gl-1);color:var(--ink-2);
+  border:1px solid var(--line-2);border-radius:999px;padding:4px 13px;transition:all .15s}
+#p-auto .ab:hover:not(:disabled){background:rgba(var(--fg),.07);color:var(--ink)}
+#p-auto .ab:disabled{opacity:.4;cursor:not-allowed}
+#p-auto .ab.on{border-color:rgba(var(--acc2),.5);color:var(--ink)}
+#p-auto .amsg{font-size:10px;color:var(--ink-3)}
+/* A DISABLED CONTROL OWES AN EXPLANATION (owner: "when hovering over the buttons you cant click
+   have a description show that button will become active when requirements are met"). A disabled
+   button with no hover state is indistinguishable from a broken one, and `title` does not fire on
+   a disabled element in any engine — so the tooltip hangs off a wrapper that is still hoverable. */
+#p-auto .abw{position:relative;display:inline-flex}
+#p-auto .abw .tipx{position:absolute;bottom:calc(100% + 7px);left:0;min-width:210px;max-width:270px;
+  padding:7px 10px;background:var(--tip-bg);border:1px solid var(--line);border-radius:6px;
+  font-size:10px;line-height:1.45;color:var(--ink-2);opacity:0;pointer-events:none;
+  transition:opacity .15s;z-index:30;text-align:left;font-weight:400}
+#p-auto .abw:hover .tipx{opacity:1}
+#p-auto .abw .tipx b{color:var(--ink);font-weight:600}
+/* THE TARGET TOGGLES, which unlike the gates above ARE controls — so here the switch shape is
+   correct and carries its meaning. The two are never adjacent by accident: gates state a record,
+   switches take a decision. */
+#p-auto .tg{display:flex;flex-direction:column;gap:6px;padding:8px 0 2px;
+  border-top:1px solid var(--line-2)}
+#p-auto .tg .th2{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);font-weight:700}
+#p-auto .tg label{display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:10.5px;line-height:1.4}
+#p-auto .tg input{appearance:none;-webkit-appearance:none;margin:0;flex:none;width:26px;height:15px;
+  border-radius:999px;background:rgba(var(--fg),.13);border:1px solid var(--line-2);position:relative;
+  cursor:pointer;transition:background .16s;margin-top:1px}
+#p-auto .tg input::after{content:'';position:absolute;top:2px;left:2px;width:9px;height:9px;
+  border-radius:50%;background:var(--ink-3);transition:transform .16s,background .16s}
+#p-auto .tg input:checked{background:rgba(var(--acc2),.42);border-color:rgba(var(--acc2),.5)}
+#p-auto .tg input:checked::after{transform:translateX(11px);background:var(--ink)}
+#p-auto .tg span{color:var(--ink-2)}
+#p-auto .tg span em{display:block;font-style:normal;color:var(--ink-3);font-size:10px;opacity:.9;margin-top:1px}
+#p-auto .kl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;
+  color:var(--ink-3);opacity:.7}
+/* The accordion title never breaks; the verdict beside it may wrap or ellipsis as it likes. */
+.sfx-rail .rl.sfx-h>.sfx-t{flex:none;white-space:nowrap;font-style:normal}
+.sfx-rail .rl.sfx-h>span{margin-left:auto;flex:0 1 auto;min-width:0;text-align:right;
+  white-space:normal;line-height:1.35}
+#p-auto .dem{font-size:10px;color:var(--warn);line-height:1.45;border-left:2px solid var(--warn);
+  padding-left:8px;opacity:.95}
+#p-auto .prop{border:1px solid var(--warn);border-radius:9px;padding:11px 14px;margin-bottom:13px;
+  background:rgba(var(--warn-r,214,158,46),.07);display:flex;align-items:center;gap:12px;font-size:11.5px}
+#p-auto .prop b{color:var(--ink)}
+#p-auto .no{margin-top:16px;padding-top:13px;border-top:1px solid var(--line-2)}
+#p-auto .no .nh{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:700;margin-bottom:7px}
+#p-auto .no div.n1{font-size:10.5px;color:var(--ink-3);line-height:1.5;max-width:760px}
+#p-auto .no div.n1 b{color:var(--ink-2);font-weight:600}
+#p-auto .hg{display:flex;flex-direction:column}
+#p-auto .hr{display:grid;grid-template-columns:96px minmax(180px,1.4fr) minmax(90px,.5fr) minmax(150px,1.3fr);
+  gap:12px;padding:5px 0;border-bottom:1px solid var(--line-2);font-size:10.5px;align-items:baseline}
+#p-auto .hr:last-child{border-bottom:0}
+#p-auto .hr .t{color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+#p-auto .hr .w{color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#p-auto .hr .r{font-variant-numeric:tabular-nums;color:var(--ink-3)}
+#p-auto .hr .r b{color:var(--ink);font-weight:600}
+#p-auto .hr .c{color:var(--ink-3);opacity:.8}
+#p-auto .hr.empty2{display:block;color:var(--ink-3);opacity:.8;line-height:1.5;max-width:700px;border-bottom:0}
 /* EXPANDABLE, because a truncated record is the one thing this page cannot be. Where a cell must
    still clip, the row opens to the full history rather than leaving an ellipsis as the last word. */
 #p-led .lg-row.x{cursor:pointer}
@@ -1751,6 +2040,25 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
 #p-led .lg-table::-webkit-scrollbar{width:0;height:0}
 #p-led .muted2{color:var(--ink-3)}
 
+/* The AI consent banner. Absent from the layout entirely when idle — `hidden` rather than an empty
+   bar — because a permanent strip that is usually blank is a thing people stop seeing. */
+#aiBanner{margin:0 0 10px;padding:9px 13px;border-radius:8px;font-size:11.5px;line-height:1.55;
+  border:1px solid var(--line-2);background:var(--gl-1);display:flex;gap:12px;align-items:center;
+  flex-wrap:wrap}
+#aiBanner[hidden]{display:none}
+#aiBanner.ask{border-color:color-mix(in srgb, var(--net) 55%, transparent)}
+#aiBanner.live{border-color:color-mix(in srgb, var(--warn) 60%, transparent)}
+#aiBanner b{font-weight:600;color:var(--ink)}
+#aiBanner .why{color:var(--ink-3);flex:1;min-width:220px}
+#aiBanner .acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#aiBanner.edit{flex-direction:column;align-items:stretch}
+/* The diff itself. Monospace, scrollable, capped — a change nobody can read is not a review. */
+.aidiff{width:100%;max-height:190px;overflow:auto;margin:6px 0 2px;padding:7px 9px;border-radius:6px;
+  background:rgba(var(--fg),.04);border:1px solid var(--line-2);
+  font-family:ui-monospace,Consolas,monospace;font-size:10.5px;line-height:1.45;white-space:pre}
+.aidiff .ad{color:rgb(var(--ok-rgb,79,209,139))}
+.aidiff .rm{color:rgb(var(--crit-rgb,255,92,110))}
+.aidiff .gap{color:var(--ink-3);opacity:.6;text-align:center}
 #toast{
   position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(70px);z-index:50;
   background:var(--tip-bg);border:1px solid var(--line);border-radius:6px;padding:9px 15px;
@@ -1771,15 +2079,17 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
     <div class="rb" data-go="therm"><svg viewBox="0 0 24 24"><path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg><span class="tip">Thermals</span></div>
     <div class="rb" data-go="diag"><svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9.5 20h5M10 22h4"/></svg><span class="tip">Diagnose</span><i class="badge" id="diagBadge"></i></div>
     <div class="rb" data-go="led"><svg viewBox="0 0 24 24"><path d="M6 3h10.5L19 5.5V21H6z"/><path d="M9 8h6.5M9 11.5h6.5M9 15h4M9 18h2.5"/></svg><span class="tip">Outcomes</span></div>
+    <!-- AUTOMATIONS sits next to OUTCOMES because that is literally where it comes from: an
+         automation is only offered once this machine's own outcomes ledger has watched you do the
+         thing by hand and measured that it worked. -->
+    <div class="rb" data-go="auto"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3v4h-4"/><path d="M9 12l2 2 4-4"/></svg><span class="tip">Automations</span><i class="badge" id="autoBadge"></i></div>
     <div class="rb" data-go="wl"><svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="M6 16V9M11 16V5M16 16v-4M21 16v-7"/></svg><span class="tip">Workloads</span></div>
     <div class="rb" data-go="rew"><svg viewBox="0 0 24 24"><path d="M11 6L4 12l7 6V6z"/><path d="M20 6l-7 6 7 6V6z"/></svg><span class="tip">Rewind</span></div>
     <div class="rb" data-go="growth"><svg viewBox="0 0 24 24"><path d="M3 17l5.5-5.5 3.5 3.5L21 6"/><path d="M15 6h6v6"/></svg><span class="tip">Growth</span></div>
     <div class="rb" data-go="boot"><svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span class="tip">Startup</span></div>
     <div class="rb" data-go="clean"><svg viewBox="0 0 24 24"><path d="M3 7h18M8 7V4h8v3M6 7l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg><span class="tip">Reclaim</span></div>
     <div class="rb" data-go="sys"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg><span class="tip">Console</span></div>
-    <div class="rb" data-go="self"><svg viewBox="0 0 24 24"><path d="M12 11.5a3 3 0 0 1 3 3c0 2.3-.4 4.3-1.1 6M9.6 13a3 3 0 0 0-.6 1.5c0 1.9.2 3.8-1 5.5M12 8.5a6 6 0 0 1 6 6c0 1.6-.15 3.2-.5 4.7M7.1 10.2A6 6 0 0 0 6 14.5c0 1.2-.1 2.5-.6 3.7M12 5.5a9 9 0 0 1 9 9M4.9 7.2a9 9 0 0 0-1.9 5.5"/></svg><span class="tip">Footprint</span></div>
-    <div class="rb" data-go="rig"><svg viewBox="0 0 24 24"><path d="M5 4v5M5 15v5M12 4v2M12 12v8M19 4v9M19 19v1"/><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="9" r="2.2"/><circle cx="19" cy="16" r="2.2"/></svg><span class="tip">Rig</span></div>
-    <div class="rb" data-go="fx"><svg viewBox="0 0 24 24"><path d="M13 2 5 13h5l-1 9 8-11h-5l1-9z"/></svg><span class="tip">FX</span></div>
+    <div class="rb" data-go="self"><svg viewBox="0 0 24 24"><path d="M12 11.5a3 3 0 0 1 3 3c0 2.3-.4 4.3-1.1 6M9.6 13a3 3 0 0 0-.6 1.5c0 1.9.2 3.8-1 5.5M12 8.5a6 6 0 0 1 6 6c0 1.6-.15 3.2-.5 4.7M7.1 10.2A6 6 0 0 0 6 14.5c0 1.2-.1 2.5-.6 3.7M12 5.5a9 9 0 0 1 9 9M4.9 7.2a9 9 0 0 0-1.9 5.5"/></svg><span class="tip">Instrument · footprint, rig, fx</span></div>
     <div class="rb" data-go="ctl"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7.5"/><path d="M12 13 7.8 8.8M12 2.5v3M4 6l2 2M20 6l-2 2"/></svg><span class="tip">Ctrl · this machine</span></div>
     <div class="rail-sp"></div>
     <div class="rb" id="themeBtn"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.6-.25-1-.55-1.4-.3-.4-.45-.7-.45-1.1 0-1.1.9-2 2-2h2.2A4.8 4.8 0 0 0 22 10c-.6-4-4.8-7-10-7z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="7.5" r="1"/></svg><span class="tip" id="themeTip">Theme · dark</span></div>
@@ -1803,6 +2113,14 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
       <span class="modechip" id="modeChip" title="this install cannot change the machine — click for detail" onclick="explainMode()">VIEWER</span>
       <div id="pressure"><span class="muted" style="font-size:10px;letter-spacing:.12em">PRESSURE</span><div id="pbar"><i></i></div><b id="pnum" style="font-size:11px;color:var(--ink-2)">—</b></div>
     </div>
+    <!-- THE CONSENT PROMPT, and it lives here rather than on a page for a reason.
+         A first attempt put it in the FOOTPRINT page's main column, where the panel photograph
+         showed it sitting below the fold at the real window size — the same mistake the
+         Relationships card made a round earlier: appending to a page designed as a fixed canvas.
+         And a request to release this machine's identifiers is not reference material you go and
+         look up; it is time-boxed and it has to reach you wherever you are. So it sits under the
+         top bar, on every page, and renders nothing at all when there is nothing to answer. -->
+    <div id="aiBanner" hidden></div>
 
     <div id="view">
       <!-- OVERVIEW -->
@@ -1823,6 +2141,7 @@ table tr:hover .btn.go,.crow:hover .btn.go{background:rgba(var(--cpu-r),.13);bor
         </div>
       </div>
 
+      <div class="page" id="p-auto"></div>
       <div class="page" id="p-cpu"></div>
       <div class="page" id="p-mem"></div>
       <div class="page" id="p-disk"></div>
@@ -2112,6 +2431,13 @@ function toast(msg,ms=2600){ const t=$('#toast'); t.textContent=msg; t.classList
       FIELD_LIMITS=fieldLimits(cv.height);
       gl.uniform1f(uLOD,FIELD_LIMITS.lod); gl.uniform1f(uWB,FIELD_LIMITS.wb);
       gl.uniform1f(uP,E('press_g',(ease.press||0)/100,.05)); gl.drawArrays(gl.TRIANGLES,0,3);
+      /* THE THERMAL TAP (2026-08-02). Sampled HERE, inside the same frame that drew it, and that
+         placement is the whole reason this works: this context has no preserveDrawingBuffer, so
+         once the frame is presented the buffer is undefined and a later drawImage returns blank or
+         stale. Reading it immediately after drawArrays is the one moment the pixels are real.
+         Enabling preserveDrawingBuffer would have been the one-line alternative and costs memory
+         and a compositor fast path on every frame, forever, to serve one decorative strip. */
+      if(typeof pulseTap==='function') pulseTap(cv);
     }catch(e){ __VB.fldErrs=++fldErrs; if(fldErrs===1) console.warn('field draw error (loop kept alive):',e); }
   }
   /* ---- A1 fast-boot invariants (2026-07-31, MARKET_RESEARCH §9) ----
@@ -2608,12 +2934,80 @@ function paintTiles(){
 
 /* ============ routing ============ */
 const RENDER={};
+
+/* THE DESK: three views of the instrument itself — what it costs, how it is driven, how it looks.
+   One rail button (the first entry), three pages. Declared here rather than inline because four
+   separate places need to agree on the membership, and a group defined by repetition is a group
+   that will disagree with itself the first time someone adds a fourth view. */
+const DESK=['self','rig','fx'];
+const DESK_LABEL={self:'FOOTPRINT',rig:'RIG',fx:'FX'};
+const DESK_ENTRY=v=>DESK.includes(v)?DESK[0]:v;
+/* The switcher markup, identical on all three pages so the control never moves between them. */
+function deskSwitch(active){
+  return '<div class="vsw">'+DESK.map(v=>
+    `<button data-vsw="${v}"${v===active?' class="on"':''}>${DESK_LABEL[v]}</button>`).join('')+'</div>';
+}
+/* Delegated, because the three pages build lazily and rebuild — a listener bound at build time
+   would be attached to whichever pages happened to have been opened. */
+addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('.vsw button[data-vsw]');
+  if(!b) return;
+  if(b.dataset.vsw!==S.view) go(b.dataset.vsw);
+});
+/* Same delegation for the thermal switch: the caption is rewritten every frame, so a bound
+   listener would be attached to a button that no longer exists by the time it is clicked. */
+addEventListener('click',async e=>{
+  const b=e.target.closest&&e.target.closest('.pulse-sw[data-thermal]');
+  if(!b) return;
+  const to=b.dataset.thermal;
+  /* Switching AWAY is always free and never asks. A control that makes you authenticate to stop
+     something is a control people stop using. */
+  if(to!=='screen'){
+    window.__vitalsThermal(to);
+    if(to!=='screen'){ try{ await fetch(API('/api/peek/close'),{method:'POST'}); }catch{} }
+    return;
+  }
+  /* Switching TO the screen read opens a window: passphrase, an explicit confirmation, and an
+     expiry. Same shape as developer mode, one step stronger in intent — that widens what an agent
+     may be told, this decides whether the software may LOOK. */
+  const msg=['Let VITALS read the screen behind this window?','',
+    'It samples a 64x24 grid of colour from the area behind this strip, a few times a second, to'
+    +' draw the particles. Nothing is written to disk and no image is produced.','',
+    'It closes by itself, and anything that reads is counted on this page.','',
+    'Minutes to leave it open (blank = 15, max 120):'].join('\n');
+  const mins=prompt(msg,'15');
+  if(mins===null) return;
+  const pass=prompt('Admin passphrase:');
+  if(!pass) return;
+  try{
+    const r=await (await fetch(API('/api/peek/open'),{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pass,confirm:true,minutes:parseInt(mins,10)||15,why:'FX pulse strip'})})).json();
+    if(r.error){ alert(r.error); return; }
+    PULSE.token=r.token||null;
+    window.__vitalsThermal('screen');
+  }catch{ alert('could not reach the bridge'); }
+});
+/* The pin-look switch (sketch ↔ mosaic) is a taste dial, not a capture decision — it changes how
+   the dots are drawn, never what the software looks at, so it asks nothing. Same delegation
+   pattern as the thermal switch, for the same reason: the caption is rewritten every frame. */
+addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('.pulse-sw[data-pins]');
+  if(b) window.__vitalsPins(b.dataset.pins);
+});
+
 function go(v){
-  /* B20 draws only while its own page is showing. Stopped on the way OUT rather than relying on the
+/* B20 draws only while its own page is showing. Stopped on the way OUT rather than relying on the
      loop noticing, so the frame after a page change is already free. */
   if(S.view==='fx'&&v!=='fx'){ try{ pulseStop(); }catch{} }
   S.view=v;
-  $$('.rb').forEach(b=>b.classList.toggle('on',b.dataset.go===v));
+  /* One rail button, three views. The three DESK pages stayed separate pages with separate
+     renderers on purpose: every existing path — the f/r/x shortcuts, ?page=rig, go('self') from
+     the UNVERIFIED COLLECTOR chip, the tick dispatch, pulseStop on leaving fx — keeps working
+     untouched. Only the rail collapsed. Merging them into one page div would have rewritten all
+     of that to save nothing the user can see. */
+  $$('.rb').forEach(b=>b.classList.toggle('on',b.dataset.go===DESK_ENTRY(v)));
+  $$('.vsw button').forEach(b=>b.classList.toggle('on',b.dataset.vsw===v));
   $$('.page').forEach(p=>p.classList.toggle('on',p.id==='p-'+v));
   if(RENDER[v]) RENDER[v]();
 }
@@ -2634,6 +3028,14 @@ setTimeout(function deepLink(){
   /* Match the internal name OR the label on the rail. The internal names are short and not always
      the word on screen - FOOTPRINT is `self` - and `?page=self` in a bug report tells the reader
      nothing. Accepting what they can actually see costs one lookup. */
+  /* THE DESK VIEWS HAVE NO RAIL BUTTON OF THEIR OWN, so validating against the rail alone would
+     have silently broken ?page=rig and ?page=fx the moment those two buttons were folded into one
+     — and a deep link that opens the wrong page is worse than one that fails, because the reader
+     believes they are looking at what the link named. `?page=footprint` also stopped matching by
+     label when the remaining button was retitled. Both handled explicitly, and both are pinned by
+     the dashboard suite so the next rail change cannot quietly take them out again. */
+  const desk=DESK.find(v=>v===want||DESK_LABEL[v].toLowerCase()===want);
+  if(desk) return go(desk);
   let btn=$(`.rb[data-go="${CSS.escape(want)}"]`);
   if(!btn) btn=$$('.rb[data-go]').find(b=>b.textContent.trim().toLowerCase()===want);
   if(!btn) return;
@@ -2706,7 +3108,10 @@ function setTheme(name,quiet,fromRelay){
      client, and the listener below already applied it) - the only missing link was that changing the
      theme never TOLD anyone. Skipped when the change came from the relay, and when nothing actually
      changed, so the wire stays quiet. */
-  if(!fromRelay&&!already){ try{ fetch(API('/api/panel/theme?t='+encodeURIComponent(name))).catch(()=>{}); }catch{} }
+  /* POST, because it changes something. Every mutating route on the bridge is method-gated now
+     (see MUTATES in bridge.js) - a GET here would be refused with 405, and rightly: the same GET
+     from an <img> on any other page would otherwise restyle this panel. */
+  if(!fromRelay&&!already){ try{ fetch(API('/api/panel/theme?t='+encodeURIComponent(name)), {method:'POST'}).catch(()=>{}); }catch{} }
 }
 function cycleTheme(){
   const cur=document.documentElement.dataset.theme||'dark';
@@ -3424,7 +3829,67 @@ RENDER.diag=async()=>{
     </div>`;
   $('#reDiag').onclick=()=>RENDER.diag();
   wireLevers(el);
+  renderRelationships(el);
 };
+
+/* ---- B16 CROSS-LAYER RELATIONSHIPS, ON THE PAGE AT LAST ------------------------------------
+ * Review found that /api/correlate had no consumer anywhere in the tree — the word "correlat"
+ * appeared zero times in this file. The whole engine, the declared pairs, the means/doesNotMean
+ * text and every statistical correction were reachable only by hand-curl. An engine nobody can
+ * read is not a feature, and the honesty work in it counted for nothing at the point it mattered.
+ *
+ * It belongs on the diagnosis page because it answers the same question the findings do, one level
+ * up: a finding reads ONE signal against a threshold, a relationship is the thing that only exists
+ * between two. Appended below the diagnosis rather than woven into it, so a slow or absent
+ * /api/correlate can never delay or break the sentence people actually came for.
+ *
+ * EVERY PAIR IS SHOWN, including the ones that did not qualify — "we looked and found nothing" is
+ * the engine's own rule and it is the more common answer. */
+async function renderRelationships(el){
+  let d;
+  try{ d=await (await fetch(API('/api/correlate?n=1200'))).json(); }catch{ return; }
+  if(!d||!d.pairs||!d.pairs.length) return;
+  const found=d.pairs.filter(p=>p.strong), rest=d.pairs.filter(p=>!p.strong);
+  const arrow=p=>p.direction==='opposed'?'↓↑':'↑↑';
+  /* The three states the two arms produce. "levels only" is UNRESOLVED, never "spurious" — a
+     shared trend looks like this and so does every relationship where one side accumulates the
+     other, which is exactly what load-vs-temperature is. */
+  const badge=p=>p.agreement==='both'
+      ? `<span class="rel-b ok" title="holds on the changes as well as the levels — a shared trend cannot produce this">levels + changes</span>`
+      : p.agreement==='levels-only'
+      ? `<span class="rel-b warn" title="holds on the levels only. A shared trend looks like this — and so does any relationship where one side accumulates the other, such as load heating a chip. This window cannot tell them apart.">levels only · unresolved</span>` : '';
+  const risk=p=>p.couldBeCoincidencePct!=null
+      ? `<span class="rel-r" title="measured rate at which two UNRELATED signals this persistent correlate this strongly">≈${p.couldBeCoincidencePct}% could be chance</span>` : '';
+  const row=p=>`<div class="rel ${p.strong?'hit':''}">
+      <div class="rel-h"><b>${sysEsc(p.label)}</b>
+        ${p.r!=null?`<span class="rel-r">r ${p.r} ${p.strong?arrow(p):''}</span>`:''}
+        ${p.strong?badge(p):''}${p.strong?risk(p):''}</div>
+      <div class="rel-w">${sysEsc(p.why)}</div>
+      ${p.strong?`<div class="rel-m"><em>means</em> ${sysEsc(p.means)}</div>
+                  <div class="rel-n"><em>does not mean</em> ${sysEsc(p.doesNotMean)}</div>`:''}
+    </div>`;
+  /* INTO THE RIGHT RAIL, NOT APPENDED TO THE PAGE — and the first version got this wrong in a way
+     no structural test could see. Appending a 357 px card to #p-diag put its top at y=710 in a
+     720 px window (the panel's real size), so it was permanently below the fold, AND it made the
+     whole diagnosis page scroll: scrollHeight 1067 against clientHeight 684.
+     That is a direct regression of a rule the owner stated after reporting it himself — "diagnosis,
+     just the right column should get a scroll not the whole page" — re-broken by the very feature
+     added to make the correlation engine visible. Found by taking a screenshot of the live panel,
+     which is the first time anyone had looked; every DOM assertion passed throughout.
+     The rail is the column already designated to scroll, and cross-signal relationships belong
+     beside the other findings anyway: they answer the same question one level up. */
+  const rail=el.querySelector('.dgx-rail');
+  const wrap=document.createElement('div');
+  wrap.className=rail?'rel-card in-rail':'card rel-card';
+  wrap.innerHTML=`<div class="hd"><h2>Relationships</h2>
+      <span class="sub">what only exists BETWEEN two signals · ${d.window} samples</span></div>
+    ${found.length?found.map(row).join(''):`<div class="rel"><div class="rel-w">No relationship in the declared table cleared the bar over this window. That is a result, not a gap — every pair below was measured and is shown with the reason it did not qualify.</div></div>`}
+    ${rest.length?`<details class="rel-rest"><summary>${rest.length} measured and not reported</summary>${rest.map(row).join('')}</details>`:''}
+    <div class="rel-f">A correlation is not a cause, which is why each pair carries what it does <b>not</b> mean. Consecutive samples are not independent draws, so every p-value here is computed on the effective sample count after discounting autocorrelation — and where that discount is not enough, the finding carries the measured chance it is a coincidence instead of a confidence it has not earned.</div>`;
+  /* No rail exists when the machine is all-clear (there are no other findings to list), so the card
+     falls back to the page — where it fits, because the hero is short in that state. */
+  if(rail) rail.appendChild(wrap); else el.appendChild(wrap);
+}
 
 /* ---- remedies attached to findings (2026-07-29) ----
  * The owner asked whether it would tell him when the fix is a reboot, a specific app, the Recycle Bin
@@ -3486,6 +3951,191 @@ function wireLevers(root){
  * Honesty rules carried over verbatim: every figure is a recorded measurement or a dash, and a
  * cleanup that returned nothing renders exactly like one that returned 2.3 GB — a ledger that
  * only remembers its wins is advertising. */
+/* ============ AUTOMATIONS ============
+   The page states one rule and then spends the rest of itself proving it per card: nothing is
+   offered that this machine has not already watched you do, and measure.
+
+   Two things this page must never be allowed to blur, because both are how an automations screen
+   becomes dangerous:
+
+   1. "ARMED" AND "ACTS BY ITSELF" ARE NOT THE SAME WORD. A disruptive automation is armed to ASK.
+      The card says "asks first" in the state slot, carries an amber stripe rather than a green
+      one, and the button reads "Let it ask" — never "On". A page that renders both as a lit
+      toggle is one misread away from someone believing their editor may be restarted unattended.
+   2. AN UNMET GATE SHOWS ITS NUMBER. "Not yet" is not feedback; "you have done it by hand 1 of 2
+      times while the trigger was open" tells you exactly what would change the answer, which is
+      also the only honest way to make an unavailable option feel like a fact rather than a wall. */
+RENDER.auto=async()=>{
+  const el=$('#p-auto');
+  /* THE HEADLINE HAS TO COVER BOTH CLASSES OR IT IS A LIE ON THE PAGE. The first version read
+     "nothing here is offered that this machine has not already watched you do by hand", which was
+     true when every candidate was earned and stopped being true the moment standard maintenance
+     was added. A summary sentence is a claim, and it ages with the code under it. */
+  const head=`<div class="hd"><h2>Automations</h2><span class="hs">Anything that <b>changes</b> this `
+    +`machine has to be earned — offered only once the record shows you already did it yourself, and `
+    +`that it worked. Anything that only <b>reads</b> is standard maintenance: offered outright, off `
+    +`until you say so.</span></div>`;
+  el.innerHTML=head+`<div class="card"><div class="empty"><span class="spin"></span> reading the record…</div></div>`;
+  let r;
+  try{ r=await (await fetch(API('/api/automations'))).json(); }
+  catch(e){ el.innerHTML=head+`<div class="card"><div class="empty">could not reach the bridge: ${sysEsc(e.message)}</div></div>`; return; }
+
+  const esc=s=>sysEsc(String(s??''));
+  const ago=t=>{ if(!t) return 'never'; const h=(Date.now()-t)/3600000;
+    return h<1?Math.max(1,Math.round(h*60))+' min ago':h<48?h.toFixed(1)+' h ago':(h/24).toFixed(1)+' days ago'; };
+
+  /* A pending proposal is the whole point of the disruptive tier, so it renders ABOVE the cards
+     and outside them — it is a question waiting on a person, not a setting. */
+  const props=(r.proposals||[]).map(p=>
+    `<div class="prop"><b>${esc(p.title)}</b><span class="muted2">raised ${ago(p.at)}`
+    +`${(p.findings||[]).length?' · while '+esc(p.findings.join(', '))+' was firing':''}</span>`
+    +`<button class="ab" data-dismiss="${esc(p.id)}" style="margin-left:auto">Dismiss</button></div>`).join('');
+
+  const gate=(met,txt)=>`<div class="${met?'ok':''}"><i></i><span>${txt}</span></div>`;
+
+  const card=(a)=>{
+    const ev=a.evidence||{};
+    /* live = it will act on its own. asks = armed, but only ever proposes. The class drives the
+       stripe, the state word and the button label from ONE decision so they cannot disagree. */
+    const live=a.armed&&a.actsAlone, asks=a.armed&&!a.actsAlone;
+    const state=cantHere?'not here':live?'running':asks?'asks first':(ev.earned?'ready':'earning');
+    /* A STANDARD automation has no gates, so it must not render any — "0 of null" was the first
+       version, and a fabricated threshold is worse than no line at all. What it shows instead is
+       the count as SCALE rather than as a condition: how often this has actually come up here is
+       the single most useful thing to know before switching something on, and it is a different
+       statement from "you have not qualified yet". */
+    const gates=[];
+    if(a.klass==='standard'){
+      gates.push(gate(true,`nothing to earn — it only ever reads, so it is offered rather than gated`));
+      if(ev.fires!=null) gates.push(gate(true,
+        `for scale: this came up <b>${ev.fires}</b> time${ev.fires===1?'':'s'} in the last ${ev.windowDays} days`));
+      if(a.cadenceHours) gates.push(gate(true,`runs on a clock, not on a symptom`));
+    } else {
+      /* "118 of 5" reads as a glitch, and a met gate has no threshold left to state — the number
+         it needed is only interesting while it is still missing. Met: the count alone. Unmet: the
+         count and what it is short of. */
+      const cnt=(n,need,met,txt,tail)=>gate(met, met?`${txt} <b>${n}</b>${tail}`
+        : `${txt} <b>${n}</b>${tail} — needs ${need}`);
+      if(ev.minFires!=null) gates.push(cnt(ev.fires, ev.minFires, ev.fires>=ev.minFires,
+        'the situation recurred', ` times in ${ev.windowDays} days`));
+      if(ev.minPulls!=null) gates.push(cnt(ev.pulls, ev.minPulls, ev.pulls>=ev.minPulls,
+        'you did it by hand', ` time${ev.pulls===1?'':'s'}${a.triggers?' while it was firing':''}`));
+      if(a.floor!=null) gates.push(gate(ev.median!=null&&ev.median>=a.floor,
+        ev.median==null?`no measured result yet — the floor is <b>${a.floor} ${esc(a.floorUnit)}</b>`
+          :`it returned a median of <b>${ev.median} ${esc(a.floorUnit)}</b>, floor ${a.floor}`));
+    }
+
+    const limits=a.cadenceHours?`every ${a.cadenceHours} h`
+      :`at most ${a.maxPerDay}× a day, ${a.minGapMin} min apart`;
+
+    /* The per-target switches, only where the targets genuinely differ in how much care they want.
+       Rendered whether or not it is armed: deciding what it MAY touch before switching it on is
+       the sane order, and a control that appears only after you commit is a trap. */
+    const targets=(a.options&&a.options.length)?`<div class="tg">
+      <div class="th2">which folders</div>
+      ${a.options.map(o=>`<label><input type="checkbox" data-tgt="${esc(a.id)}" value="${esc(o.key)}"
+        ${(a.targets||[]).includes(o.key)?'checked':''}><span>${esc(o.label)}<em>${esc(o.what)}</em></span></label>`).join('')}
+      <span class="amsg" data-tmsg="${esc(a.id)}"></span></div>`:'';
+
+    /* THE DISABLED BUTTON'S EXPLANATION. It names the specific missing gate rather than saying
+       "requirements not met" — the reader can already see that; what they cannot see is what
+       would change it. */
+    /* TWO DIFFERENT KINDS OF UNAVAILABLE, and collapsing them would be the whole mistake.
+       "Not yet" means keep using the machine and it will earn itself. "Not here" means this host
+       cannot do it and no amount of waiting will change that. A card that says "not yet" about a
+       Mac trying to run a PowerShell zip is telling the reader to wait for something that will
+       never arrive. */
+    const cantHere=!!a.blocked;
+    const blocked=cantHere||(!a.armed&&!ev.earned);
+    const tip=cantHere
+      ? `<span class="tipx"><b>Not on this computer.</b> ${esc(a.blocked.why)}</span>`
+      : blocked?`<span class="tipx"><b>Not available yet.</b> This becomes active on its own `
+      +`once the record above is complete — ${esc((ev.need||[]).join('; '))}. Nothing to configure: `
+      +`keep using the machine and it will earn itself.</span>`:'';
+
+    return `<div class="ac${live?' live':''}${asks?' asks':''}" data-id="${esc(a.id)}">
+      <div class="ah"><b>${esc(a.title)}</b><span class="st">${state}</span></div>
+      <div class="kl">${a.klass==='standard'?'standard maintenance · offered, not earned':'earned from your own record'}</div>
+      <div class="gt">${gates.join('')}</div>
+      <div class="bl">${esc(a.blast)}</div>
+      ${targets}
+      ${a.demotedWhy?`<div class="dem">${esc(a.demotedWhy.why)}</div>`:''}
+      <div class="bl"><b>${limits}</b>${a.runCount?` · ran ${a.runCount}×, last ${ago(a.lastRun&&a.lastRun.at)}`
+        +(a.lastRun&&a.lastRun.benefit!=null?` returning ${a.lastRun.benefit} ${esc(a.floorUnit||'')}`:''):''}</div>
+      <div class="arow">
+        <span class="abw"><button class="ab${a.armed?' on':''}" data-act="${a.armed?'disarm':'arm'}" data-id="${esc(a.id)}"
+          ${blocked?'disabled':''}>${
+            a.armed?(a.actsAlone?'Turn off':'Stop asking'):(a.actsAlone?'Let it run':'Let it ask')}</button>${tip}</span>
+        <span class="amsg" data-msg="${esc(a.id)}">${
+          cantHere?'this computer cannot run it — hover for why'
+          :a.armed?'':(ev.earned?(a.klass==='standard'?'ready when you are':'the record has earned this')
+            :'not yet — hover for what is missing')}</span>
+      </div>
+    </div>`;
+  };
+
+  /* THE ACCOUNTABILITY HALF. Empty is the normal state and it says so plainly rather than being
+     hidden when there is nothing in it — a log that appears only once it has content teaches the
+     reader that its absence means "not applicable" instead of "nothing has happened yet". */
+  const hist=(r.history||[]);
+  const histRows=hist.length
+    ? hist.map(h=>{
+        const it=(r.items||[]).find(i=>i.id===h.id);
+        const d=new Date(h.at);
+        return `<div class="hr"><span class="t">${d.toLocaleDateString(undefined,{month:'short',day:'numeric'})} `
+          +`${d.toTimeString().slice(0,5)}</span>`
+          +`<span class="w">${esc(it?it.title:h.id)}</span>`
+          +`<span class="r">${h.ok===false?'<b style="color:rgb(var(--t3))">failed</b>'
+              :h.benefit!=null?`<b>${h.benefit} ${esc((it&&it.floorUnit)||'')}</b>`:'ran'}</span>`
+          +`<span class="c">${(h.during||[]).length?'while '+esc(h.during.join(', '))+' was firing':'on its own schedule'}</span></div>`;
+      }).join('')
+    : `<div class="hr empty2">Nothing has run unattended yet — every entry on this machine's `
+      +`record so far is something you did yourself.</div>`;
+
+  el.innerHTML=head+props
+    +`<div class="ag">${(r.items||[]).map(card).join('')}</div>`
+    +`<div class="no"><div class="nh">what has run without you${hist.length?' · '+hist.length:''}</div>`
+    +`<div class="hg">${histRows}</div></div>`
+    /* Stated, not omitted. A missing option reads as an oversight; a refused one reads as a
+       decision, and this is a decision with a reason worth reading. */
+    +`<div class="no"><div class="nh">cannot be automated, and why</div>`
+    +(r.unautomatable||[]).map(u=>`<div class="n1"><b>${esc(u.title)}.</b> ${esc(u.why)}</div>`).join('')
+    +`</div>`;
+
+  $$('#p-auto .ab[data-act]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.id, act=b.dataset.act;
+    const msg=$(`#p-auto [data-msg="${CSS.escape(id)}"]`);
+    b.disabled=true; if(msg) msg.textContent='…';
+    try{
+      const res=await (await fetch(API('/api/automations/'+act),{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})).json();
+      /* The refusal is reported verbatim. An arm that fails silently, or that reports a generic
+         "could not", would leave the reader with no way to tell a bug from a rule. */
+      if(res.error){ if(msg) msg.textContent=res.error; b.disabled=false; return; }
+      RENDER.auto();
+    }catch(e){ if(msg) msg.textContent='could not reach the bridge'; b.disabled=false; }
+  });
+  $$('#p-auto input[data-tgt]').forEach(cb=>cb.onchange=async()=>{
+    const id=cb.dataset.tgt;
+    const keys=$$(`#p-auto input[data-tgt="${CSS.escape(id)}"]`).filter(x=>x.checked).map(x=>x.value);
+    const msg=$(`#p-auto [data-tmsg="${CSS.escape(id)}"]`);
+    try{
+      const res=await (await fetch(API('/api/automations/targets'),{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id,keys})})).json();
+      /* On refusal the checkbox goes BACK. Leaving it visually unchecked while the server kept the
+         old selection would be the page and the machine disagreeing about what it may delete. */
+      if(res.error){ if(msg) msg.textContent=res.error; cb.checked=true; return; }
+      if(msg) msg.textContent='saved';
+    }catch{ if(msg) msg.textContent='could not reach the bridge'; cb.checked=!cb.checked; }
+  });
+  $$('#p-auto .ab[data-dismiss]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{ await fetch(API('/api/automations/dismiss'),{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({id:b.dataset.dismiss})}); }catch{}
+    RENDER.auto();
+  });
+};
+
 RENDER.led=async()=>{
   const el=$('#p-led');
   el.innerHTML=`<div class="hd"><h2>Outcomes</h2></div><div class="card"><div class="empty"><span class="spin"></span> replaying the ledger…</div></div>`;
@@ -5733,14 +6383,24 @@ function gtmHook() {
  *
  * It reports INTERVALS, never a verdict. A panel that decided for itself would put the policy in
  * the surface that happens to be open, and there can be two of those. */
-const FRAMES = { buf: [], last: 0, sending: false };
+const FRAMES = { buf: [], last: 0, sending: false, tap: null, suspended: false };
 (function frameWatch(){
   const tick = (now) => {
     if (FRAMES.last) {
       const dt = now - FRAMES.last;
       /* A gap over a second is the tab being throttled or backgrounded, not a stall the user felt.
          Recording it would manufacture jank out of the browser's own power saving. */
-      if (dt > 0 && dt < 1000) FRAMES.buf.push(+dt.toFixed(1));
+      if (dt > 0 && dt < 1000) {
+        const v = +dt.toFixed(1);
+        FRAMES.buf.push(v);
+        /* A SECOND, PRIVATE COPY FOR WHOEVER IS MEASURING A WINDOW. The sweep used to clear `buf`,
+           wait 1800 ms and read it back — but the uploader below drains that same array every 2 s,
+           so on most windows the sweep was taking a median of whatever fraction happened to survive,
+           and on an unlucky one of nothing at all. Two consumers, one buffer, and the reader was
+           silently getting a different window from the one it asked for. A tap costs nothing and
+           removes the sharing rather than trying to time around it. */
+        if (FRAMES.tap) FRAMES.tap.push(v);
+      }
     }
     FRAMES.last = now;
     requestAnimationFrame(tick);
@@ -5750,8 +6410,13 @@ const FRAMES = { buf: [], last: 0, sending: false };
   setInterval(() => {
     if (!FRAMES.buf.length || FRAMES.sending) return;
     /* Nothing is sent while hidden: those intervals describe a tab the compositor stopped driving,
-       and the governor treats an ABSENT signal correctly, whereas a misleading one it cannot. */
-    if (document.hidden) { FRAMES.buf.length = 0; return; }
+       and the governor treats an ABSENT signal correctly, whereas a misleading one it cannot.
+       A SWEEP IS THE SAME CASE. It deliberately puts the panel into states expected to render
+       badly — that is what it is measuring — so feeding those frames to the governor would have it
+       throttle the machine partway through, which both perturbs the experiment and produces a
+       "your machine is janky" verdict about frames the experiment manufactured. Absence is the
+       honest signal here, and the governor is built to treat absence as no evidence. */
+    if (document.hidden || FRAMES.suspended) { FRAMES.buf.length = 0; return; }
     const batch = FRAMES.buf.splice(0, FRAMES.buf.length);
     FRAMES.sending = true;
     fetch(API('/api/frames'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5791,18 +6456,30 @@ async function runSweep(name, cssVar, values, rounds){
     /* One sample = the median frame interval over a fixed window. Median, not mean, for the same
        reason everything else here uses one: a single hitch would otherwise decide the arm. */
     measure: async () => {
-      FRAMES.buf.length = 0;
+      /* Its own tap, not the shared upload buffer — see FRAMES above. This window is exactly the
+         1800 ms asked for, every time, rather than whatever the 2-second uploader left behind. */
+      FRAMES.tap = [];
       await new Promise(r => setTimeout(r, 1800));
-      const xs = FRAMES.buf.slice().sort((a,b)=>a-b);
+      const xs = FRAMES.tap.sort((a,b)=>a-b);
+      FRAMES.tap = null;
       return xs.length ? xs[Math.floor(xs.length/2)] : NaN;
     },
   });
-  const receipt = await sw.run(name, values, rounds || 7);
-  /* The dial is put back exactly as it was. An experiment that leaves the machine in its last
-     tested state is not an experiment, it is a change nobody asked for. */
-  if (before) document.documentElement.style.setProperty(cssVar, before);
-  else document.documentElement.style.removeProperty(cssVar);
-  if (receipt.ok) {
+  /* The governor is deaf for the duration. A sweep manufactures bad frames on purpose. */
+  FRAMES.suspended = true;
+  let receipt;
+  try {
+    receipt = await sw.run(name, values, rounds || 7);
+  } finally {
+    /* ALL OF THE CLEANUP IS IN HERE, INCLUDING THE DIAL. A sweep that throws partway through would
+       otherwise leave the panel on whichever arm was being tested and the governor permanently
+       deaf — a failed experiment silently becoming a permanent change to two things. */
+    FRAMES.suspended = false;
+    FRAMES.tap = null;
+    if (before) document.documentElement.style.setProperty(cssVar, before);
+    else document.documentElement.style.removeProperty(cssVar);
+  }
+  if (receipt && receipt.ok) {
     try { await fetch(API('/api/sweep'), { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ receipt }) }); } catch {}
   }
@@ -5840,7 +6517,590 @@ const PULSE = {
   parts: [], raf: 0, last: 0, cv: null, cx: null, t: 0,
   /* Read from the live tick each frame; these are defaults for the moments before one arrives. */
   pressure: 0.2, spin: 0.5,
+  /* ---- THE THERMAL TAP (2026-08-02, owner: "make the particle react to whats behind it like a
+     thermal microscope") ----
+     A downsampled copy of the ambient field, cropped to EXACTLY the strip this canvas occupies, so
+     a particle at (x,y) looks up the light that is genuinely underneath it rather than a global
+     average. That distinction is the whole idea: an average makes every particle do the same thing
+     at the same time, which reads as the field pulsing, not as particles feeling it.
+     WHAT IT SEES depends on the source: the app own ambient field, or — when the owner opens a
+     passphrase-gated, self-expiring, caller-scoped window — the DESKTOP behind this panel, via
+     the bridge peek worker. This paragraph used to state flatly that reading the desktop was
+     impossible and would be a different product decision. It became possible the same day, and
+     the sentence stayed. See src, below, for which is live.
+
+     GRID SIZE is a real trade: 64x24 is 1,536 lookups' worth of resolution for a 6 KB readback.
+     Larger buys detail nobody can see at this particle count; smaller starts quantising the
+     filaments into blocks. */
+  grid: null, gw: 64, gh: 24, gcv: null, gcx: null, tapAt: 0,
+  /* IT MEASURES ITSELF, because the number turned out to matter and to be unpredictable.
+     Reading a WebGL canvas from 2D forces a GPU→CPU sync, and the cost does NOT fall off with the
+     sample rate the way a per-frame cost would: measured in headless Edge, 11 Hz cost 5.0 ms a
+     sample and 4 Hz cost 9.4 ms a sample, because a longer gap leaves more queued GPU work to
+     drain before the read can answer. Quartering the rate bought a quarter less than expected.
+     That also means the figure is a property of the compositor, not of this code, so a number
+     measured on one host says little about another — which is why the strip prints its own,
+     live, on the machine you are actually running. */
+  tapMs: 0, tapN: 0,
+  /* WHERE THE HEAT COMES FROM: 'off' | 'field' | 'screen'.
+     'screen' reads the DESKTOP BEHIND THE WINDOW through the bridge's peek worker, and it is not
+     the default and never will be: a monitor whose whole pitch is that it stays local does not get
+     to start sampling the display because the effect looks better. 'field' reads this app's own
+     ambient wash and costs nothing outside the panel. */
+  src: (() => { try { const v = localStorage.getItem('vitals-fx-thermal');
+    return (v === 'off' || v === 'field' || v === 'screen') ? v : (v === '0' ? 'off' : 'field'); }
+    catch { return 'field'; } })(),
+  peekAt: 0, peekMs: 0, peekN: 0, peekBusy: false, peekErr: null,
+  /* THE PIN SCREEN (screen source only) — see pulsePinUpdate. `targets` are typed arrays of where
+     the pins SHOULD be to best represent the image; `pins` are where they actually are, easing. */
+  pins: null, tgx: null, tgy: null, tgc: null, tgr: null, pinMs: 0, pinN: 0,
+  /* TWO LOOKS, both the owner's. 'sketch' is the ask — "you should see dots in details... like
+     the metal face thing from the 90s": dots live where something is HAPPENING and flat ground
+     stays empty. 'mosaic' is the earlier full-coverage build he reviewed and named worth keeping
+     — "this is cool like could be its own setting but doesnt quite accomplish". */
+  pinLook: (() => { try { const v = localStorage.getItem('vitals-fx-pinlook');
+    return v === 'mosaic' ? 'mosaic' : 'sketch'; } catch { return 'sketch'; } })(),
 };
+window.__vitalsPins = (v) => {
+  PULSE.pinLook = v === 'mosaic' ? 'mosaic' : 'sketch';
+  PULSE.pins = null; PULSE.tgx = null;      // rebuilt from the next capture, pins ease to it
+  try { localStorage.setItem('vitals-fx-pinlook', PULSE.pinLook); } catch {}
+};
+/* A dial, because this is the one part of the strip with a real price. Persisted like every other
+   FX dial; the caption carries the switch so the control sits on the claim it governs. */
+window.__vitalsThermal = (v) => {
+  PULSE.src = (v === 'off' || v === 'field' || v === 'screen') ? v : 'field';
+  PULSE.grid = null; PULSE.tapN = 0; PULSE.tapMs = 0; PULSE.peekN = 0; PULSE.peekMs = 0; PULSE.peekErr = null;
+  PULSE.pins = null; PULSE.tgx = null; PULSE.pinN = 0; PULSE.pinMs = 0;   // the pin screen restarts with its source
+  try { localStorage.setItem('vitals-fx-thermal', PULSE.src); } catch {}
+};
+
+/* Called from inside the field's own draw, once per field frame at most, and ONLY while the strip
+   is on screen — the cost of a decorative surface must not be paid while nobody is looking at it,
+   which is the rule the FOOTPRINT page exists to enforce against this very kind of feature. */
+function pulseTap(fieldCv){
+  if (PULSE.src !== 'field') return;                                // the dial is off — no readback at all
+  if (!PULSE.cv || !PULSE.raf) return;                  // the strip is not running
+  const now = performance.now();
+  /* THE RATE IS THE WHOLE COST, and it was measured rather than guessed. Reading a WebGL canvas
+     from 2D forces a GPU→CPU sync: 5.0 ms mean, 17.9 ms worst, per sample, on this machine. At the
+     11 Hz the first version used that is 5.0% of one core for a decorative strip — precisely the
+     kind of charge the FOOTPRINT page exists to catch, and it would have been charged to the user
+     and defended by nobody.
+     4 Hz costs a quarter of that and is visually indistinguishable, because nothing downstream can
+     resolve faster: the field's own time base is t*0.035, and each particle eases its reading with
+     a ~170 ms time constant. Sampling faster than the thing you are sampling changes only the bill. */
+  if (now - PULSE.tapAt < 250) return;
+  PULSE.tapAt = now;
+  try {
+    const r = PULSE.cv.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return;
+    if (!PULSE.gcv) {
+      PULSE.gcv = document.createElement('canvas');
+      PULSE.gcv.width = PULSE.gw; PULSE.gcv.height = PULSE.gh;
+      PULSE.gcx = PULSE.gcv.getContext('2d', { willReadFrequently: true });
+    }
+    /* The field canvas is rendered at a fraction of CSS size (it is a background), so the crop has
+       to be expressed in ITS backing-store pixels, not in CSS pixels. Getting this wrong does not
+       fail loudly — it samples the wrong part of the screen and looks almost right, which is worse. */
+    const sx = fieldCv.width / innerWidth, sy = fieldCv.height / innerHeight;
+    const t0 = performance.now();
+    PULSE.gcx.drawImage(fieldCv,
+      r.left * sx, r.top * sy, r.width * sx, r.height * sy,
+      0, 0, PULSE.gw, PULSE.gh);
+    PULSE.grid = PULSE.gcx.getImageData(0, 0, PULSE.gw, PULSE.gh).data;
+    /* AUTO-RANGE, and this is what made the effect legible rather than theoretical.
+       Measured before it existed: mean luminance under the strip was 0.08 on a 0–1 scale, so the
+       gradient across one texel was a few THOUSANDTHS and the steering force it produced was ~13%
+       of the orbit — real, provable in the numbers, and invisible on screen. Absolute brightness
+       was never the interesting quantity; the interesting quantity is where this crop is brighter
+       than the rest of itself.
+       Which is also what a thermal camera does: it does not map 0 K to black, it maps the coldest
+       thing in frame to black. Same instrument, same reason.
+       Tracked per tap so the range follows the field as it evolves. */
+    /* ONE INDEX FOR BOTH SOURCES. The field tap and the screen peek now feed the same
+       hue/saturation/lightness tables, so the particles behave identically whichever they are
+       reading and there is exactly one definition of what a colour is. */
+    pulseIndex();
+    /* Rolling mean of what this actually costs HERE. Printed in the caption, so the price is
+       stated at the point of the claim rather than in a comment nobody reads. */
+    const d = performance.now() - t0;
+    PULSE.tapMs = PULSE.tapN ? PULSE.tapMs + (d - PULSE.tapMs) / Math.min(20, PULSE.tapN + 1) : d;
+    PULSE.tapN++;
+  } catch { PULSE.grid = null; }
+}
+
+/* ===== READING THE DESKTOP BEHIND THE WINDOW =====
+   The one source that is genuinely outside this application. Off by default; the owner turns it on
+   from the caption, and while it is on the caption says so in those words.
+
+   WHY THE BRIDGE AND NOT THE BROWSER. A page cannot read what is behind its own window at all —
+   backdrop-filter blurs those pixels and nothing samples them — so this asks the bridge, which owns
+   a small PowerShell worker that BitBlts the rectangle and returns LUMINANCE ONLY at 64×24. No
+   image crosses the wire and none is retained; see peek.js for why that shape was chosen over
+   getDisplayMedia, which would have handed this page an actual video stream of the desktop.
+
+   RATE. Measured on this machine: 42 ms a sample, and that is CopyFromScreen itself rather than
+   anything downstream — replacing the downsampling loop with GDI+ moved it 49→42, which is how you
+   know where the cost lives. So this samples about 1.4×/s, not 4×/s like the field tap: the desktop
+   behind a window changes on human timescales, and the eased per-particle heat carries the rest.
+
+   SINGLE-FLIGHT. A slow screen must not build a queue of stale rectangles that all arrive at once,
+   each describing a desktop that has already moved. */
+async function pulsePeek(){
+  if (PULSE.src !== 'screen' || !PULSE.cv || !PULSE.raf || PULSE.peekBusy) return;
+  const now = performance.now();
+  if (now - PULSE.peekAt < 700) return;
+  PULSE.peekAt = now; PULSE.peekBusy = true;
+  try {
+    const r = PULSE.cv.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return;
+    /* Screen coordinates, in PHYSICAL pixels: screenX/screenY are CSS pixels of the scaled desktop
+       and the worker is DPI-aware, so both sides must speak the same units or the capture lands
+       somewhere else entirely — and it would not fail, it would return a confident reading of the
+       wrong part of the screen. */
+    const dpr = devicePixelRatio || 1;
+    const q = new URLSearchParams({
+      x: Math.round((window.screenX + r.left) * dpr), y: Math.round((window.screenY + r.top) * dpr),
+      w: Math.round(r.width * dpr), h: Math.round(r.height * dpr),
+      gw: PULSE.gw, gh: PULSE.gh, token: PULSE.token || '',
+    });
+    const t0 = performance.now();
+    const d = await (await fetch(API('/api/peek?' + q))).json();
+    if (d.error) {
+      /* CONTENTION IS NOT FAILURE. The worker serves one request at a time across the WHOLE bridge,
+         and a second panel — docked, a pinned second window, or another page open on the same
+         machine — makes that a normal condition rather than an error. Reported as one, the caption
+         said "cannot read the screen" while the screen was in fact being read perfectly well by
+         the window next door, and the reader would reasonably conclude the feature was broken.
+         So a busy worker is a skipped tick: keep the last grid, try again on the next one. */
+      if (!/already in flight/.test(d.error)) PULSE.peekErr = d.error;
+      return;
+    }
+    PULSE.peekErr = null;
+    const raw = atob(d.grid);
+    /* Widened into the same RGBA shape the field tap produces, so every reader downstream has one
+       code path and the two sources cannot drift into subtly different definitions of colour. */
+    const g = new Uint8ClampedArray(PULSE.gw * PULSE.gh * 4);
+    for (let i = 0, c = 0; i < raw.length; i += 3, c++) {
+      g[c * 4] = raw.charCodeAt(i); g[c * 4 + 1] = raw.charCodeAt(i + 1);
+      g[c * 4 + 2] = raw.charCodeAt(i + 2); g[c * 4 + 3] = 255;
+    }
+    PULSE.grid = g; pulseIndex();
+    const dt = performance.now() - t0;
+    PULSE.peekMs = PULSE.peekN ? PULSE.peekMs + (dt - PULSE.peekMs) / Math.min(20, PULSE.peekN + 1) : dt;
+    PULSE.peekN++;
+  } catch (e) { PULSE.peekErr = (e && e.message) || 'unreachable'; }
+  finally { PULSE.peekBusy = false; }
+}
+
+/* ===== THE SPECTRUM INDEX =====
+   Owner, 2026-08-02: "each particle is assigned a color that it is drawn to, then have that
+   spectrum measurement gradually moving... (ideally, were looking for like spectrum probably not
+   like brightness)."
+   That is the right instinct and it is why the previous version read as inert over a real desktop.
+   BRIGHTNESS CANNOT SEE A PICTURE: dark blue water and dark grey chrome are the same number, so a
+   photo of dolphins and the edge of a dark app window flatten into one smooth ramp with nothing to
+   steer toward. Hue separates them, which is exactly what makes an image legible as regions.
+   Computed once per capture rather than per particle: 1,536 conversions a frame would be 400,000 a
+   second for numbers that only change when the screen does. */
+/* ===== THE PALETTE: ONE PARTICLE PER COLOUR THAT IS ACTUALLY THERE =====
+   Owner, 2026-08-02: "we cant map out all the colors of the spectrum, we have to map out the colors
+   available in the window... each particle accounts for one of the colors... the more detail
+   something has, the more particles would be drawn to it... like a pin screen that holds the shape."
+
+   That is the fix for the real defect in the previous version, which spread 260 targets evenly
+   round the abstract hue wheel. On a photograph of water that wastes most of the fleet: nothing on
+   screen is red, orange or yellow, so a third of the particles are hunting for something that does
+   not exist and end up milling wherever the gradient happens to point. Meanwhile the twenty shades
+   of blue that ARE there get three particles between them.
+
+   Mapping the OBSERVED colours instead does something better than fix the waste, and it is the
+   insight: taking DISTINCT colours — not colours weighted by how much area they cover — makes
+   density follow DETAIL. A flat wall of one blue is a single entry however many cells it fills, so
+   it attracts one particle. A cluttered region is fifty entries and attracts fifty. Edges, text and
+   texture pull a crowd; empty space does not. That is exactly how a pin screen holds a shape, and
+   it falls out of the accounting rather than being drawn on top of it.
+
+   Quantised to 5 bits a channel before dedupe: at 8 bits, sensor and scaling noise make almost
+   every cell "distinct" and the whole idea collapses back into one-particle-per-cell. */
+function pulsePalette(){
+  const g = PULSE.grid;
+  if (!g || !PULSE.parts.length) return;
+  const n = PULSE.gw * PULSE.gh;
+  const seen = new Map();
+  for (let i = 0; i < n; i++) {
+    const r = g[i * 4], gg = g[i * 4 + 1], b = g[i * 4 + 2];
+    const key = ((r >> 3) << 10) | ((gg >> 3) << 5) | (b >> 3);
+    if (!seen.has(key)) seen.set(key, [r, gg, b]);
+  }
+  const list = [...seen.values()];
+  if (!list.length) return;
+  /* Ordered by lightness so ADJACENT particles want ADJACENT shades. Without an ordering the
+     assignment is arbitrary and neighbouring particles chase unrelated colours across the whole
+     strip, which reads as noise however correct the accounting is. Lightness rather than hue
+     because it is the one axis every colour has — greys and blacks sort into it properly, and the
+     owner's "it could end up actually sort of drawing stuff in black and white" depends on that. */
+  list.sort((A, B) => (0.299 * A[0] + 0.587 * A[1] + 0.114 * A[2])
+                    - (0.299 * B[0] + 0.587 * B[1] + 0.114 * B[2]));
+  PULSE.palette = list;
+  const N = PULSE.parts.length;
+  for (let i = 0; i < N; i++) {
+    const c = list[Math.min(list.length - 1, Math.floor((i + 0.5) * list.length / N))];
+    const q = PULSE.parts[i];
+    /* EASED, NOT SNAPPED. The palette is rebuilt on every capture, so as you drag the window the
+       accounting changes continuously — which is the point. Assigning the new target outright
+       would teleport every particle's intent 1.4 times a second and the strip would strobe. */
+    if (q.tr == null) { q.tr = c[0]; q.tg = c[1]; q.tb = c[2]; }
+    else { q.tr += (c[0] - q.tr) * 0.25; q.tg += (c[1] - q.tg) * 0.25; q.tb += (c[2] - q.tb) * 0.25; }
+  }
+}
+
+function pulseIndex(){
+  const g = PULSE.grid;
+  if (!g) { PULSE.hue = PULSE.sat = PULSE.lum = PULSE.palette = null; return; }
+  const n = PULSE.gw * PULSE.gh;
+  const hue = new Float32Array(n), sat = new Float32Array(n), lum = new Float32Array(n);
+  let lo = 1, hi = 0;
+  for (let i = 0; i < n; i++) {
+    const r = g[i * 4] / 255, gg = g[i * 4 + 1] / 255, b = g[i * 4 + 2] / 255;
+    const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), d = mx - mn;
+    let h = 0;
+    if (d > 1e-6) {
+      h = mx === r ? ((gg - b) / d + (gg < b ? 6 : 0)) : mx === gg ? ((b - r) / d + 2) : ((r - gg) / d + 4);
+      h /= 6;
+    }
+    hue[i] = h;
+    /* Saturation gates how much the hue is TRUSTED. A near-grey pixel has a hue, and it is noise —
+       steering by it would send particles chasing the rounding error in a grey toolbar. */
+    sat[i] = mx > 1e-6 ? d / mx : 0;
+    const l = 0.299 * r + 0.587 * gg + 0.114 * b;
+    lum[i] = l; if (l < lo) lo = l; if (l > hi) hi = l;
+  }
+  PULSE.hue = hue; PULSE.sat = sat; PULSE.lum = lum; PULSE.lo = lo; PULSE.hi = hi;
+  pulsePalette();
+  /* The screen source gets the pin screen: the reconstruction targets are recomputed from every
+     fresh capture, ~1.4×/s, and the per-frame work only chases them. */
+  if (PULSE.src === 'screen') pulsePinUpdate();
+}
+
+/* ===== THE PIN SCREEN (owner, 2026-08-01): "MOST IMPORTANTLY it's about recreating the best
+   possible the image behind it — like those metal things from the 90s that capture the face."
+   =============================================================================================
+   WHY THE PREVIOUS PHYSICS COULD NOT DO THIS, however it was tuned. Each particle walked uphill
+   on "how close is the colour here to the colour I want" — a local rule with no global promise.
+   Gradient ascent finds A patch of the right colour, not THE arrangement of 400 points that best
+   covers the picture; many particles find the same patch, and nothing in the system ever asks
+   whether the image as a whole is represented. Measured before the rewrite: affinity-where-I-am
+   0.735 vs 0.676 at random — a real effect, and not a picture (luminance correlation between the
+   strip and the screen behind it: 0.27).
+
+   So this is an ASSIGNMENT, not a force balance. Once per capture:
+     1. DENSITY = DETAIL. Each grid cell is weighted by its local contrast (gradient magnitude of
+        luminance) plus a small floor. That is the owner's own insight — "the more detail
+        something has, the more particles would be drawn to it... it could end up actually sort
+        of drawing stuff in black and white" — and it is also what stippling has always done:
+        edges get the points, flat ground gets a few large ones.
+     2. WEIGHTED LLOYD RELAXATION. The targets are pushed to the weighted centroids of their own
+        Voronoi regions, twice per capture. Lloyd is what supplies the property gradient ascent
+        lacked: every cell of the image belongs to exactly one target, so COVERAGE IS STRUCTURAL —
+        a region can only go unrepresented if it genuinely has no weight. Targets persist across
+        captures and each relaxation starts from where they were, so when the screen changes the
+        assignment glides instead of reshuffling.
+     3. A pin STARVED of weight (its whole region emptied — the window moved, the video cut) is
+        reseeded by importance-sampling the new density, which is the one deliberate teleport: its
+        pin then EASES there, which is the visible "re-situating" the owner asked for.
+   Each pin takes the colour of the cell under its target and a radius from the AREA of its
+   Voronoi region — few pins on flat ground, so each must carry more of it; many pins on an edge,
+   so each is fine. That area term is what turns a stipple plot into something that reads as the
+   image: flat colour gets covered, edges get drawn.
+
+   COST, measured on this machine and printed in the caption: the whole assignment (density, two
+   Lloyd passes over 1,536 cells × 400 targets, reseeding, colouring) runs once per capture at
+   1.4×/s on the panel thread — see PULSE.pinMs for the live figure. The per-frame work is 400
+   spring integrations and 400 arcs, comparable to the 260-particle field it replaces. */
+const PIN_N = 400;   /* 260 could trace the shapes but left flat regions unreadably sparse; 400 is
+                        where the test pattern's solid blocks first read as solid. Beyond ~500 the
+                        gain is invisible at this strip height and the Lloyd pass cost keeps rising. */
+function pulsePinUpdate(){
+  const P = PULSE, g = P.grid, lum = P.lum;
+  if (!g || !lum || !P.cv) return;
+  const t0 = performance.now();
+  const gw = P.gw, gh = P.gh, n = gw * gh;
+  const W = Math.max(1, P.cv.clientWidth), H = Math.max(1, P.cv.clientHeight);
+  /* Distances are computed in an aspect-true frame (x scaled by W/H), because the strip is ~6×
+     wider than tall: in raw 0..1 coordinates every Voronoi region would be a horizontal sliver
+     and the relaxation would space pins by column only. */
+  const A = W / H;
+  const sketch = P.pinLook !== 'mosaic';
+  /* 1. DENSITY.
+     SKETCH: detail and nothing else — the owner's specification, verbatim: "you should see dots
+     in details ... theres a bunch of big circles and the whole screen is full tons in the areas
+     where there little to no color transistion". So the weight is the local colour transition
+     (the strongest per-channel gradient, which catches an equal-brightness colour boundary that
+     a luminance-only edge would miss), with a DEAD ZONE below sensor noise: a flat region does
+     not get "a little" weight, it gets none, or four hundred dots divide up the nothing.
+     MOSAIC: contrast plus a visibility-scaled floor, so flat regions are covered in their own
+     colour — the full-coverage look he reviewed and asked to keep as a setting. */
+  const w = P._pinW && P._pinW.length === n ? P._pinW : (P._pinW = new Float32Array(n));
+  const cdf = P._pinCdf && P._pinCdf.length === n ? P._pinCdf : (P._pinCdf = new Float64Array(n));
+  let tot = 0;
+  for (let y = 0; y < gh; y++) {
+    for (let x = 0; x < gw; x++) {
+      const i = y * gw + x;
+      const xm = (y * gw + Math.max(0, x - 1)) * 4, xp = (y * gw + Math.min(gw - 1, x + 1)) * 4;
+      const ym = (Math.max(0, y - 1) * gw + x) * 4, yp = (Math.min(gh - 1, y + 1) * gw + x) * 4;
+      let e = 0;
+      for (let c = 0; c < 3; c++) {
+        const ex = Math.abs(g[xp + c] - g[xm + c]), ey = Math.abs(g[yp + c] - g[ym + c]);
+        const ec = Math.max(ex, ey) / 255;
+        if (ec > e) e = ec;
+      }
+      let v;
+      if (sketch) v = e < 0.055 ? 0 : (e - 0.055) * (e - 0.055) * 8;
+      else {
+        const vis = Math.max(g[i * 4], g[i * 4 + 1], g[i * 4 + 2]) / 255;
+        v = 0.02 + 0.28 * vis * vis + e * 3.5;
+      }
+      w[i] = v; tot += v; cdf[i] = tot;
+    }
+  }
+  /* A screen with nothing happening on it (or one flat wall of colour) has no detail to draw.
+     The honest sketch of it is an empty strip, not a fabricated texture — keep the last targets
+     and let the pins hold station until something appears. */
+  if (!(tot > 1e-6)) { P.pinN++; return; }
+  /* Importance sampler: u in [0,tot) → a jittered position inside the cell that owns u. */
+  const seed = (u) => {
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (cdf[m] < u) lo = m + 1; else hi = m; }
+    return [((lo % gw) + Math.random()) / gw, (((lo / gw) | 0) + Math.random()) / gh];
+  };
+  /* 2. TARGETS. Stratified on first sight of a grid — (j+jitter)/N through the CDF guarantees
+     initial coverage in proportion to detail — then RELAXED, never rebuilt, on every capture. */
+  let TX = P.tgx, TY = P.tgy;
+  if (!TX || TX.length !== PIN_N) {
+    TX = P.tgx = new Float64Array(PIN_N); TY = P.tgy = new Float64Array(PIN_N);
+    P.tgc = new Uint8ClampedArray(PIN_N * 3); P.tgr = new Float32Array(PIN_N).fill(2);
+    for (let j = 0; j < PIN_N; j++) {
+      const s = seed((j + Math.random()) * tot / PIN_N);
+      TX[j] = s[0] * A; TY[j] = s[1];                        // stored aspect-scaled
+    }
+  }
+  const sx = P._pinSx || (P._pinSx = new Float64Array(PIN_N));
+  const sy = P._pinSy || (P._pinSy = new Float64Array(PIN_N));
+  const sw = P._pinSw || (P._pinSw = new Float64Array(PIN_N));
+  const sn = P._pinSn || (P._pinSn = new Float64Array(PIN_N));
+  for (let iter = 0; iter < 2; iter++) {
+    sx.fill(0); sy.fill(0); sw.fill(0); sn.fill(0);
+    for (let cy = 0; cy < gh; cy++) {
+      const Y = (cy + 0.5) / gh;
+      for (let cx2 = 0; cx2 < gw; cx2++) {
+        const X = ((cx2 + 0.5) / gw) * A;
+        let best = 0, bd = 1e18;
+        for (let j = 0; j < PIN_N; j++) {
+          const ddx = TX[j] - X, ddy = TY[j] - Y;
+          const d2 = ddx * ddx + ddy * ddy;
+          if (d2 < bd) { bd = d2; best = j; }
+        }
+        const wi = w[cy * gw + cx2];
+        sx[best] += X * wi; sy[best] += Y * wi; sw[best] += wi; sn[best]++;
+      }
+    }
+    for (let j = 0; j < PIN_N; j++) {
+      if (sw[j] > 1e-9) { TX[j] = sx[j] / sw[j]; TY[j] = sy[j] / sw[j]; }
+      /* 3. Starved: its whole region lost its weight. The TARGET teleports; the pin will ease. */
+      else { const s = seed(Math.random() * tot); TX[j] = s[0] * A; TY[j] = s[1]; }
+    }
+  }
+  /* 4. GLOBAL REBALANCE, because Lloyd alone is local. A converged weighted Voronoi holds about
+     equal weight per pin — so a pin holding far less than its share is misallocated, full stop.
+     After a wholesale scene change (measured with the fixture mirrored) no pin ever STARVES —
+     the floor keeps drip-feeding the emptied side — so the local relaxation stalled at 0.51
+     correlation with the boundary in the wrong place, and stayed there. Reseeding the worst few
+     per capture is the global channel: ~20 pins in flight at once reads as the strip visibly
+     re-situating, and a full side-swap completes in a few seconds at the capture rate. */
+  {
+    const share = tot / PIN_N;
+    let moved = 0;
+    const start = (Math.random() * PIN_N) | 0;      // rotate, or low indices bear all the churn
+    for (let k = 0; k < PIN_N && moved < 20; k++) {
+      const j = (start + k) % PIN_N;
+      if (sw[j] < share * 0.35) { const s = seed(Math.random() * tot); TX[j] = s[0] * A; TY[j] = s[1]; moved++; }
+    }
+  }
+  /* Colour and size, per look. */
+  const cellPx = (W / gw) * (H / gh);
+  for (let j = 0; j < PIN_N; j++) {
+    const cx3 = Math.min(gw - 1, Math.max(0, (TX[j] / A * gw) | 0));
+    const cy3 = Math.min(gh - 1, Math.max(0, (TY[j] * gh) | 0));
+    const ci = cy3 * gw + cx3, i4 = ci * 4;
+    const r0 = g[i4], g0 = g[i4 + 1], b0 = g[i4 + 2];
+    if (sketch) {
+      /* THE INVERSE, owner's own fix: "if they are going to color react like that likely best to
+         inverse rather than have them darken at dark colors so you can actually see the dots."
+         A dot is INK on the strip's dark ground — its hue can come from the image, its
+         brightness cannot, because a black dot drawn on black is a dot that was not drawn. So
+         keep the cell's hue, but lift its value to max(V, 255−V): dark edges draw bright, bright
+         edges stay bright, and a near-black cell (whose hue is sensor junk) draws as plain
+         bright grey — which is exactly the "drawing stuff in black and white" he predicted. */
+      const mx = Math.max(r0, g0, b0);
+      const v2 = Math.max(mx, 255 - mx);
+      if (mx > 24) { const s2 = v2 / mx;
+        P.tgc[j * 3] = Math.min(255, r0 * s2); P.tgc[j * 3 + 1] = Math.min(255, g0 * s2);
+        P.tgc[j * 3 + 2] = Math.min(255, b0 * s2); }
+      else { P.tgc[j * 3] = P.tgc[j * 3 + 1] = P.tgc[j * 3 + 2] = 225; }
+      /* Small, always — the sketch is a line of dots, not circles. A touch larger where the
+         transition is strong, so the hard edges read heavier, the way pen pressure would. */
+      P.tgr[j] = 1.3 + 1.4 * Math.min(1, Math.sqrt(w[ci] / 8) * 2.4);
+    } else {
+      P.tgc[j * 3] = r0; P.tgc[j * 3 + 1] = g0; P.tgc[j * 3 + 2] = b0;
+      /* Mosaic: radius grows with the area this pin answers for — few pins on flat ground, so
+         each must carry more of it; 0.72 of full coverage keeps some grout so it still reads as
+         made of pins. */
+      P.tgr[j] = Math.min(18, Math.max(1.7, 0.72 * Math.sqrt(sn[j] * cellPx / Math.PI)));
+    }
+  }
+  const d = performance.now() - t0;
+  P.pinMs = P.pinN ? P.pinMs + (d - P.pinMs) / Math.min(20, P.pinN + 1) : d;
+  P.pinN++;
+}
+
+/* The pin screen's per-frame half: each pin is a critically-damped spring chasing its target,
+   easing its colour and size the same way. Springs rather than teleports because the targets move
+   1.4 times a second — snapped, the strip would strobe; sprung, a change on screen reads as the
+   pins flowing to their new stations, which is the "constantly situating" the owner described.
+   The faint wander keeps a settled picture alive without disturbing it. */
+function pulsePinStep(dt){
+  const P = PULSE, cx = P.cx, cv = P.cv;
+  if (!cx || !cv) return;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  P.t += dt;
+  const A = W / Math.max(1, H);
+  let pins = P.pins;
+  if (!pins || pins.length !== PIN_N) {
+    /* Born scattered and dark, then they flow to their stations — the ease-in IS the reveal. */
+    pins = P.pins = Array.from({ length: PIN_N }, () => ({
+      x: Math.random(), y: Math.random(), vx: 0, vy: 0,
+      cr: 8, cg: 10, cb: 14, rad: 1.5, wob: Math.random() * 6.283, ws: Math.random() * 0.8 }));
+  }
+  /* Its own wipe: the picture's colours are ABSOLUTE, so the backdrop must be neutral — the theme
+     tint the ambient field wipes with would sit inside every colour the strip claims to have seen.
+     Translucent, so motion still leaves a short readable path. */
+  cx.globalCompositeOperation = 'source-over';
+  cx.fillStyle = 'rgba(5,7,11,0.5)';
+  cx.fillRect(0, 0, W, H);
+  const K = 26, damp = Math.exp(-7 * dt), ce = Math.min(1, dt * 6);
+  for (let j = 0; j < PIN_N; j++) {
+    const q = pins[j];
+    const txp = (P.tgx[j] / A) * W, typ = P.tgy[j] * H;
+    const xp = q.x * W, yp = q.y * H;
+    q.vx += (txp - xp) * K * dt; q.vy += (typ - yp) * K * dt;   // px/s
+    q.vx *= damp; q.vy *= damp;
+    /* Speed-capped so a pin reseeded across the strip TRAVELS — about a second edge to edge —
+       instead of blinking. Uncapped, the spring peaks near 2,900 px/s on a full-width move
+       (measured), which reads as a teleport; the cap is what makes a scene change look like the
+       field re-situating, pins streaming to their new stations. Ordinary settled motion runs
+       two orders of magnitude below it and never feels the cap. */
+    const sp2 = Math.hypot(q.vx, q.vy);
+    if (sp2 > 950) { q.vx *= 950 / sp2; q.vy *= 950 / sp2; }
+    q.wob += dt * (0.7 + q.ws);
+    q.x = (xp + q.vx * dt + Math.cos(q.wob) * 0.18) / W;
+    q.y = (yp + q.vy * dt + Math.sin(q.wob * 1.3) * 0.14) / H;
+    q.cr += (P.tgc[j * 3] - q.cr) * ce;
+    q.cg += (P.tgc[j * 3 + 1] - q.cg) * ce;
+    q.cb += (P.tgc[j * 3 + 2] - q.cb) * ce;
+    q.rad += (P.tgr[j] - q.rad) * ce;
+    cx.globalAlpha = 0.92;
+    cx.fillStyle = `rgb(${q.cr | 0} ${q.cg | 0} ${q.cb | 0})`;
+    cx.beginPath(); cx.arc(q.x * W, q.y * H, q.rad, 0, 6.283); cx.fill();
+  }
+  cx.globalAlpha = 1;
+}
+
+/* HOW MUCH THIS PARTICLE WANTS THIS CELL, 0..1.
+   Two ways to match, blended by how colourful the cell is:
+     · a SATURATED cell is judged on hue distance — the particle seeking cyan finds the water;
+     · a GREY cell is judged on lightness against the particle's own target — which is what lets a
+       particle lock onto the dark edge of a window, the thing that has no hue at all and is
+       exactly the feature the owner expected to see traced.
+   Without the second term every particle ignores greys, and a screen that is mostly chrome and
+   text has nothing to say. */
+/* HOW MUCH THIS PARTICLE WANTS THIS CELL: nearness to the specific colour it was assigned, in RGB.
+   This replaced a hue-distance-plus-lightness blend, and the simplification is a correctness gain
+   rather than tidying. Hue distance has to be gated by saturation (a near-grey has a hue, and it is
+   noise), which meant greys were judged on a different axis from colours and the two never quite
+   agreed at the boundary — so the dark window edge and the blue water were being scored by
+   different rules. A plain distance to a real observed colour treats black, grey, white and cyan
+   identically, because they are all just points. */
+function pulseAffinity(px, py, q){
+  const g = PULSE.grid;
+  if (!g || q.tr == null) return null;
+  const gx = Math.min(PULSE.gw - 1, Math.max(0, (px * PULSE.gw) | 0));
+  const gy = Math.min(PULSE.gh - 1, Math.max(0, (py * PULSE.gh) | 0));
+  const i = (gy * PULSE.gw + gx) * 4;
+  const dr = (g[i] - q.tr) / 255, dg = (g[i + 1] - q.tg) / 255, db = (g[i + 2] - q.tb) / 255;
+  /* Green weighted highest, blue lowest — the same weighting luminance uses, because two colours
+     that differ only in blue look far more alike than two that differ as much in green, and an
+     unweighted distance sends particles chasing differences nobody can see. */
+  const d = Math.sqrt(0.299 * dr * dr + 0.587 * dg * dg + 0.114 * db * db);
+  return 1 - Math.min(1, d * 2.2);
+}
+
+function pulseAffGrad(px, py, q){
+  if (!PULSE.hue) return null;
+  const ex = 1 / PULSE.gw, ey = 1 / PULSE.gh;
+  return [pulseAffinity(px + ex, py, q) - pulseAffinity(px - ex, py, q),
+          pulseAffinity(px, py + ey, q) - pulseAffinity(px, py - ey, q)];
+}
+
+/* Luminance under a particle, 0..1. Returns null when there is nothing to read — the field is off,
+   the theme renders it flat, or the tap has not run yet — and every caller treats null as "no
+   signal" rather than as darkness, so a field that cannot be sampled leaves the particles at their
+   ordinary behaviour instead of freezing them all at zero. */
+function pulseHeat(px, py){
+  const g = PULSE.grid;
+  if (!g) return null;
+  const gx = Math.min(PULSE.gw - 1, Math.max(0, (px * PULSE.gw) | 0));
+  const gy = Math.min(PULSE.gh - 1, Math.max(0, (py * PULSE.gh) | 0));
+  const i = (gy * PULSE.gw + gx) * 4;
+  /* Weighted by ALPHA: the field is drawn with alpha:true over the shell, so a transparent texel is
+     "nothing here", not "black here". Multiplying by a/255 keeps an unpainted region cool instead
+     of reading it as the coldest possible reading, which would invert the whole effect on themes
+     that paint sparsely. */
+  const a = g[i + 3] / 255;
+  const lum = ((g[i] * 0.299 + g[i + 1] * 0.587 + g[i + 2] * 0.114) / 255) * a;
+  /* Normalised to what is actually IN FRAME (see the auto-range in pulseTap). The guard matters:
+     on a genuinely flat crop the span collapses and dividing by it would amplify sensor noise into
+     confident-looking structure — particles streaming purposefully toward nothing. A flat field
+     has no signal, and saying so is the correct answer, not scaling up the dither. */
+  const span = PULSE.hi - PULSE.lo;
+  if (!(span > 0.004)) return null;
+  return Math.max(0, Math.min(1, (lum - PULSE.lo) / span));
+}
+
+/* WHICH WAY IS WARMER. Central differences over one texel, which is what turns the reading from a
+   modulation into a DIRECTION — and that was the whole problem with the first version: scaling
+   speed and size by local brightness is invisible on a smooth wash, because a smooth wash has
+   almost no local contrast to scale by. What is legible is particles going somewhere.
+   Returns null on no signal, and every caller leaves the physics alone rather than steering by
+   zero, which would be a real force pointing in an arbitrary direction. */
+function pulseGrad(px, py){
+  if (!PULSE.grid) return null;
+  const ex = 1 / PULSE.gw, ey = 1 / PULSE.gh;
+  const l = pulseHeat(px - ex, py), r = pulseHeat(px + ex, py);
+  const u = pulseHeat(px, py - ey), d = pulseHeat(px, py + ey);
+  /* EVERY SAMPLE OR NONE. `pulseHeat` returns null on a flat crop, and in JavaScript `null - null`
+     is 0 while `0.5 - null` is 0.5 — so subtracting unchecked turns "no reading" into either a
+     confident zero or a completely fabricated slope, and the particles would steer hard toward
+     something that was never measured. Nulls do not travel through arithmetic; they have to be
+     stopped at the door. */
+  if (l == null || r == null || u == null || d == null) return null;
+  return [r - l, d - u];
+}
 
 function pulseInit(cv){
   PULSE.cv = cv;
@@ -5854,12 +7114,42 @@ function pulseInit(cv){
     dir: i % 2 ? 1 : -1,
     /* 66-80 degrees, per particle, so the streams are not all on identical orbits. */
     ang: (66 + Math.random() * 14) * Math.PI / 180,
+    /* Its own eased reading of the light beneath it. Per-particle and eased because the sample grid
+       has hard texel edges: read raw, a particle crossing a boundary snaps size and colour in one
+       frame and the whole strip flickers as a grid. Starts at 0.5 so the first frames are neutral
+       rather than uniformly cold. */
+    heat: 0.5,
+    /* ITS TASTE IN LIGHT — "weighted towards but random selection still" (owner, 2026-08-02).
+       Sign: 70% climb toward the warm, 30% away from it. A single population all seeking the same
+       thing is what POOLS — every particle ends in the same bright cell and the strip becomes a
+       blob, which is the failure the rotation was already introduced to avoid, arriving by a
+       different route. Two opposed populations keep the field circulating: the seekers arriving
+       are what the avoiders are leaving.
+       Magnitude: 0.35–1.6, so even within one camp they do not move as a block. A particle with a
+       weak taste is mostly still orbiting; a strong one visibly commits. */
+    seek: (Math.random() < 0.7 ? 1 : -1) * (0.35 + Math.random() * 1.25),
+    /* THE COLOUR THIS ONE IS DRAWN TO, and the rate its taste drifts.
+       Spread evenly round the wheel at birth rather than randomly: 260 random hues leave gaps and
+       clumps, and a gap is a colour on screen that nothing goes to. `want` then creeps, so every
+       particle is continuously being pulled toward a slightly different shade and the field never
+       settles into an answer — the owner's "always being drawn to a deeper or different color".
+       Drift rates differ per particle so they do not sweep the spectrum in formation. */
+    want: (i + 0.5) / 260,
+    wantL: 0.12 + Math.random() * 0.76,       // its preferred lightness, for the greys
+    drift: (0.006 + Math.random() * 0.02) * (Math.random() < 0.5 ? 1 : -1),
+    /* A slow personal drift direction, re-rolled by nobody: without it a particle that reaches a
+       flat region has no reason to leave it and simply parks. */
+    wob: Math.random() * 6.283,
     hue: Math.random(),
     m: 0.6 + Math.random() * 0.8,
   }));
 }
 
 function pulseStep(dt){
+  /* The screen source, once it has a picture, is the pin screen — a different instrument sharing
+     the canvas. Until the first capture lands (or if peek fails) the ambient physics keeps the
+     strip alive, so a broken screen read degrades to the old behaviour rather than to a blank. */
+  if (PULSE.src === 'screen' && PULSE.tgx) return pulsePinStep(dt);
   const P = PULSE, cx = P.cx, cv = P.cv;
   if (!cx || !cv) return;
   const W = cv.clientWidth, H = cv.clientHeight;
@@ -5872,8 +7162,21 @@ function pulseStep(dt){
   /* Pressure drives speed and reach. It is the MEASURED figure, not a random walk — the entire
      claim of this surface is that its motion means something. */
   const p = Math.max(0, Math.min(1, P.pressure));
-  const pull = 0.35 + p * 1.5;
-  const speedCap = 0.22 + p * 0.5;
+  /* WHEN THERE IS AN IMAGE TO READ, THE IMAGE DRIVES.
+     Owner, 2026-08-02: "they dont seem to much care whats behind them, they just have this stupid
+     little tornado motion and bunch up at some spots." Exactly right, and it was arithmetic rather
+     than taste: the rotated attraction runs at ~1.0 while a colour gradient across one texel is a
+     few hundredths, so multiplying it by 26 still left the orbit an order of magnitude larger than
+     anything the screen could say. The result was a tornado with a faint bias — which is precisely
+     what "doesn't care what's behind it" looks like.
+     So the orbit becomes a gentle circulation and the colour affinity becomes the main force. The
+     orbit is not deleted: with no signal it is the whole design, and it is still what keeps the
+     strip alive in the gaps between features on screen. It just stops shouting over the data. */
+  const reading = !!PULSE.hue;
+  const pull = (0.35 + p * 1.5) * (reading ? 0.13 : 1);
+  /* Lower cap while reading, so a particle can actually SIT on the region it wanted instead of
+     overshooting it every pass. A tornado is what you get when nothing can ever settle. */
+  const speedCap = (0.22 + p * 0.5) * (reading ? 0.55 : 1);
 
   /* The attractor drifts slowly, so the composition changes without the particles being teleported. */
   const ax = 0.5 + Math.cos(P.t * 0.11) * 0.16;
@@ -5886,6 +7189,60 @@ function pulseStep(dt){
   cx.globalCompositeOperation = 'lighter';
 
   const warm = cssv('--crit'), cool = cssv('--cpu'), mid = cssv('--mem');
+
+  /* ===== MUTUAL REPULSION (owner: "give them a force field or even a tension or slight bounce")
+     Colour-seeking spreads particles across the spectrum, but a screen is not evenly coloured — a
+     mostly-blue photo means most of the wheel has nowhere to go, and everyone whose taste is near
+     that blue arrives at the same cell. Personal space fixes what taste alone cannot.
+     BUCKETED, NOT ALL-PAIRS. 260 particles is 33,670 pairs a frame, ~1M/s at 30fps, for a force
+     that only matters between neighbours. Each particle lands in a coarse bin and is compared only
+     against its own bin — linear in practice, and the bin is sized so anything close enough to
+     matter shares one. */
+  /* Scaled UP while reading, because the force it has to hold off went up too. "Bunch up at some
+     spots" is what happens when a strong shared attractor (a big blue region every cyan-seeking
+     particle wants) meets a repulsion tuned for a weak one. The bin grid is sized so the radius
+     never exceeds one bin — a particle must not be able to crowd a neighbour it is never compared
+     against, which would show up as clumps sitting exactly on the bin seams. */
+  const RAD = reading ? 0.045 : 0.028, PUSH = reading ? 1.9 : 0.55;
+  const BW = 20, BH = 6;
+  const bins = P._bins || (P._bins = []);
+  for (let i = 0; i < BW * BH; i++) bins[i] = (bins[i] || (bins[i] = []), bins[i].length = 0, bins[i]);
+  for (const q of P.parts) {
+    const bx = Math.min(BW - 1, Math.max(0, (q.x * BW) | 0));
+    const by = Math.min(BH - 1, Math.max(0, (q.y * BH) | 0));
+    bins[by * BW + bx].push(q);
+  }
+  /* EACH BIN AGAINST ITSELF AND ITS FORWARD NEIGHBOURS. Comparing only within a bin leaves every
+     bin boundary a wall the force cannot cross: two particles a hair apart either side of a seam
+     never repel, so the clumps reappear pinned to an invisible grid — a bug that would read as
+     "the repulsion doesn't work" rather than as an indexing mistake.
+     Forward-only (right, down, and the two diagonals) so each pair is still visited exactly once. */
+  const NB = [[0, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+  for (let by = 0; by < BH; by++) {
+    for (let bx = 0; bx < BW; bx++) {
+      const home = bins[by * BW + bx];
+      if (!home.length) continue;
+      for (const [ox, oy] of NB) {
+        const nx = bx + ox, ny = by + oy;
+        if (nx < 0 || nx >= BW || ny >= BH) continue;
+        const other = bins[ny * BW + nx];
+        const same = ox === 0 && oy === 0;
+        for (let a = 0; a < home.length; a++) {
+          for (let b = same ? a + 1 : 0; b < other.length; b++) {
+            const p1 = home[a], p2 = other[b];
+            let ddx = p1.x - p2.x, ddy = (p1.y - p2.y) * 0.35;   // y squashed: the strip is wide and short
+            const d2 = ddx * ddx + ddy * ddy;
+            if (d2 > RAD * RAD || d2 < 1e-9) continue;
+            const dd = Math.sqrt(d2), f = (1 - dd / RAD) * PUSH * dt;
+            ddx /= dd; ddy /= dd;
+            p1.vx += ddx * f; p1.vy += ddy * f;
+            p2.vx -= ddx * f; p2.vy -= ddy * f;
+          }
+        }
+      }
+    }
+  }
+
   for (const q of P.parts) {
     let dx = ax - q.x, dy = ay - q.y;
     const d = Math.hypot(dx, dy) + 1e-4;
@@ -5902,11 +7259,51 @@ function pulseStep(dt){
        bright dot — the failure the rotation exists to avoid, arriving more slowly. */
     const core = Math.max(0, 0.14 - d) * 9;
 
-    q.vx += (rx * pull - dx * core) * dt / q.m;
-    q.vy += (ry * pull - dy * core) * dt / q.m;
+    /* THE HEAT UNDER THIS PARTICLE. Sampled per-particle from the field directly beneath it, so
+       the strip behaves like a thermal microscope over the ambient wash rather than like a strip
+       that pulses in unison. Null means the field could not be read (off, docked, flat theme, or
+       the first frames before a tap) — and null must NOT collapse to 0, or an unreadable field
+       would look exactly like a stone-cold one and freeze every particle. Absent reading → the
+       original behaviour, unchanged. */
+    const heat = pulseHeat(q.x, q.y);
+    const grad = pulseGrad(q.x, q.y);
+    q.heat += ((heat == null ? 0.5 : heat) - q.heat) * Math.min(1, dt * 6);   // eased: texels are hard edges
+    /* Warm regions accelerate and reach further; cool ones hold station. Multiplicative around 1 so
+       a field with no contrast leaves the physics exactly where it was. */
+    const hot = heat == null ? 1 : (0.62 + q.heat * 0.9);
+
+    q.vx += (rx * pull * hot - dx * core) * dt / q.m;
+    q.vy += (ry * pull * hot - dy * core) * dt / q.m;
+
+    /* THE STEER. Climb (or descend) the brightness gradient according to this particle's taste.
+       This is the part you can actually see: the orbit still holds the composition together, and
+       on top of it each particle drifts toward the shade it prefers, so the streams bend around
+       bright regions instead of ignoring them.
+       SEEK is large because the gradient is small — a smooth field differs by a few hundredths of
+       a unit across one texel, so a force that looks enormous next to `pull` is comparable once
+       multiplied by it. The wander keeps particles that reach flat ground from parking there. */
+    if (grad) {
+      /* Big, and it has to be: the thing it multiplies is a difference in colour-match across one
+         texel, which on a real screen is a few hundredths. This number looks enormous next to
+         `pull` and is comparable once the multiplication is done — the previous 26 was the reason
+         the picture lost to the orbit. */
+      const SEEK = reading ? 130 : 26;
+      q.wob += dt * 0.6;
+      /* ITS TASTE MOVES. Wrapped into 0..1 so a particle circles the whole spectrum rather than
+         running off the end and parking on red forever. */
+      q.want += q.drift * dt; if (q.want > 1) q.want -= 1; if (q.want < 0) q.want += 1;
+      /* Steer up the COLOUR-AFFINITY gradient — toward more of the shade this particle wants —
+         rather than up the brightness gradient. `seek` still flips a minority the other way, which
+         is what keeps the spectrum being left as well as arrived at. */
+      const ag = pulseAffGrad(q.x, q.y, q);
+      const sx = ag ? ag[0] : grad[0], sy = ag ? ag[1] : grad[1];
+      q.vx += (sx * q.seek * SEEK + Math.cos(q.wob) * 0.06) * dt / q.m;
+      q.vy += (sy * q.seek * SEEK + Math.sin(q.wob) * 0.06) * dt / q.m;
+    }
 
     const sp = Math.hypot(q.vx, q.vy);
-    if (sp > speedCap) { q.vx = q.vx / sp * speedCap; q.vy = q.vy / sp * speedCap; }
+    const cap = speedCap * (heat == null ? 1 : (0.7 + q.heat * 0.75));
+    if (sp > cap) { q.vx = q.vx / sp * cap; q.vy = q.vy / sp * cap; }
     q.vx *= 0.985; q.vy *= 0.985;                 // drag, or energy accumulates without bound
     q.x += q.vx * dt; q.y += q.vy * dt;
 
@@ -5914,10 +7311,31 @@ function pulseStep(dt){
     if (q.x < -0.05) q.x += 1.1; if (q.x > 1.05) q.x -= 1.1;
     if (q.y < -0.05) q.y += 1.1; if (q.y > 1.05) q.y -= 1.1;
 
-    const col = p > 0.66 ? warm : p > 0.33 ? mid : cool;
-    cx.globalAlpha = 0.10 + sp / speedCap * 0.5;
+    /* COLOUR IS THE READING, not the mood. Pressure still sets the palette the strip is working in
+       — that is the machine-wide fact — but WITHIN it each particle takes its rung from the light
+       it is sitting on, which is what makes the field legible as a temperature map instead of a
+       single colour that changes for everyone at once. With no signal it falls back to the
+       pressure-only choice this had before, so nothing about the old behaviour is lost. */
+    /* IT WEARS THE COLOUR IT IS CHASING. Without this the strip renders a photo of dolphins in
+       three theme accents, so the reader is told there is structure but never shown what kind —
+       and "is it actually reacting to what is behind it" stays unanswerable by looking. With it,
+       a blue region visibly gathers blue particles and the dark edge of a window gathers the dark
+       ones, which is the whole point of reading spectrum rather than brightness.
+       Falls back to the pressure-coloured scheme whenever there is no colour signal at all, so
+       nothing about the no-source behaviour changed. */
+    /* IT WEARS THE COLOUR IT WAS ASSIGNED — the literal observed colour, not a hue derived from it.
+       This is what turns the accounting into a picture: every particle carrying one of the colours
+       actually on screen, sitting where that colour is, is a low-resolution rendering of what is
+       behind the window. Brightened slightly because the strip composites additively over a lit
+       field and the raw values sink into it. */
+    const col = q.tr != null
+      ? `rgb(${Math.min(255, q.tr * 1.25 + 26) | 0} ${Math.min(255, q.tg * 1.25 + 26) | 0} ${Math.min(255, q.tb * 1.25 + 26) | 0})`
+      : heat == null
+        ? (p > 0.66 ? warm : p > 0.33 ? mid : cool)
+        : (q.heat > 0.62 ? warm : q.heat > 0.3 ? mid : cool);
+    cx.globalAlpha = (0.10 + sp / cap * 0.5) * (heat == null ? 1 : 0.55 + q.heat * 0.8);
     cx.fillStyle = col;
-    const r = 0.8 + q.m * (0.7 + p * 1.1);
+    const r = (0.8 + q.m * (0.7 + p * 1.1)) * (heat == null ? 1 : 0.7 + q.heat * 0.6);
     cx.beginPath(); cx.arc(q.x * W, q.y * H, r, 0, 6.283); cx.fill();
   }
   cx.globalAlpha = 1;
@@ -5943,10 +7361,80 @@ function pulseStart(){
          disagree with each other. */
       PULSE.pressure = Math.max(0, Math.min(1, (cpu / 100) * 0.5 + (mem / 100) * 0.35 + Math.min(1, q / 4) * 0.15));
     }
+    /* Fire-and-forget: the strip must not stall a frame waiting for a screen read, and a reading
+       that arrives late is simply used on the next frame. */
+    if (PULSE.src === 'screen') pulsePeek();
     try { pulseStep(dt); } catch (e) { PULSE.raf = 0; console.warn('pulse', e); return; }
     const cap = $('#pulseCap');
-    if (cap) cap.textContent = 'pressure ' + (PULSE.pressure * 100).toFixed(0)
-      + '% · ' + PULSE.parts.length + ' particles · rotated attraction 66–80°, alternating spin';
+    /* The caption states whether the thermal tap is LIVE, because "reacting to the field beneath
+       it" and "not able to read the field" look similar for a few seconds and identical on a theme
+       that paints flat. A caption that claims the sampling unconditionally would be describing a
+       feature rather than reporting one. */
+    if (cap) {
+      /* THE PRICE IS ON THE LABEL. This is the only part of the strip that costs anything worth
+         naming, so the caption carries its measured cost and its off switch together — the same
+         rule the RIG page follows for every dial: state the trade where the control is. */
+      /* The base line describes the instrument that is actually running: the pin screen is not
+         "rotated attraction", and a caption describing the physics the mode replaced would be
+         specific, plausible and wrong. */
+      const base = (PULSE.src === 'screen' && PULSE.tgx)
+        ? (PULSE.pinLook === 'mosaic'
+            ? 'pin mosaic · ' + PIN_N + ' pins covering the picture · assignment '
+            : 'pin sketch · ' + PIN_N + ' pins in the detail · assignment ')
+          + PULSE.pinMs.toFixed(1) + ' ms a capture · '
+        : 'pressure ' + (PULSE.pressure * 100).toFixed(0)
+        + '% · ' + PULSE.parts.length + ' particles · rotated attraction 66–80°, alternating spin · ';
+      /* THE SOURCE IS NAMED, ALWAYS, and "the desktop behind this window" is spelled out in those
+         words whenever it is the source. A capture you have to infer from a subtle visual change
+         is a capture nobody consented to. The three states are one cycle, so the control is also
+         the disclosure. */
+      /* ASKED ONCE, and it has to actually be asked: the first version read `PULSE.peekAvail` and
+     nothing ever set it, so `undefined === false` was false and the control showed everywhere —
+     a guard that reads a field nobody writes, which is the same nothing as no guard at all.
+     Defaults to SHOWING until the answer arrives, because hiding a working control while a fetch
+     is in flight is the worse of the two mistakes. */
+  if (PULSE.peekAvail === undefined && !PULSE._availAsked) {
+    PULSE._availAsked = true;
+    fetch(API('/api/peek/status')).then(r => r.json())
+      .then(d => { PULSE.peekAvail = d && d.available !== false; })
+      .catch(() => { PULSE.peekAvail = true; });   // unreachable bridge is not "unsupported host"
+  }
+  /* The desktop option is offered only where it can work — see /api/peek/status.available. */
+  const sw = (to, label) => (to === 'screen' && PULSE.peekAvail === false) ? ''
+    : `<button class="pulse-sw" data-thermal="${to}">${label}</button>`;
+      const html = sysEsc(base) + (
+        PULSE.src === 'off'
+          ? 'thermal read off — motion is pressure only ' + sw('field', 'read the app field')
+        : PULSE.src === 'screen'
+          ? (PULSE.peekErr
+              ? `cannot read the screen — ${sysEsc(PULSE.peekErr)} ` + sw('field', 'use the app field')
+              : `<b style="color:rgb(var(--t3))">reading the desktop behind this window</b>, `
+                /* ROUND TRIP, said explicitly. This is the time from asking to having the grid —
+                   panel to bridge to worker and back — not the CPU the capture burns, which is
+                   about 42 ms of it. Calling it "a sample" the way the field tap does would invite
+                   the two to be compared, and they are not the same quantity. */
+                /* SAYS COLOUR, BECAUSE IT IS COLOUR. This read "brightness only" for one build
+                   after the capture became RGB — the disclosure kept describing the narrower thing
+                   the code used to do. A privacy label that lags the code is worse than none: it
+                   is specific, reassuring and wrong. */
+                + `${PULSE.gw}×${PULSE.gh} colour, 1.4×/s · `
+                + `<b>${PULSE.peekMs.toFixed(0)} ms</b> round trip `
+                /* The look switch lives beside the source switch: both looks are the owner's —
+                   the sketch is the ask, the mosaic is the build he asked to keep. */
+                + (PULSE.tgx ? `<button class="pulse-sw" data-pins="${PULSE.pinLook === 'mosaic' ? 'sketch' : 'mosaic'}">`
+                    + (PULSE.pinLook === 'mosaic' ? 'sketch look' : 'mosaic look') + '</button> ' : '')
+                + sw('field', 'stop reading the screen'))
+        : PULSE.grid
+          ? `sampling the app's own field beneath them, ${PULSE.gw}×${PULSE.gh} at 4 Hz · `
+            + `<b>${PULSE.tapMs.toFixed(1)} ms</b> a sample `
+            + sw('screen', 'read the desktop instead') + ' ' + sw('off', 'off')
+          : 'field not readable — motion is pressure only ' + sw('off', 'off'));
+      /* ONLY WHEN IT CHANGES. Assigning innerHTML every frame reparses the string, rebuilds the
+         button and discards it 30 times a second — a caption costing more than the thing it
+         describes — and it can also destroy the button between mousedown and click. Every value in
+         here is rounded to something that moves slowly, so the guard actually holds. */
+      if (cap.__last !== html) { cap.__last = html; cap.innerHTML = html; }
+    }
     PULSE.raf = requestAnimationFrame(loop);
   };
   PULSE.raf = requestAnimationFrame(loop);
@@ -6136,6 +7624,10 @@ const PERSIST_INTENT = {
   'vitals-alerts': 'the alert thresholds you set',
   'vitals-watches': 'the watches you created',
   'vitals-netrecs': 'network records you chose to keep',
+  /* Added the same hour the key was: an unclassified key is the one thing the audit two panels
+     over exists to catch, and shipping the feature without this line would have had the product
+     accusing itself of remembering something nobody chose. */
+  'vitals-fx-thermal': 'what the pulse strip reads — off, the app field, or the desktop behind it',
 };
 function persistAudit() {
   const rows = [];
@@ -6174,8 +7666,11 @@ function watchBeacon(force){
   WATCH_LAST = now;
   const looking = document.hasFocus() && !document.hidden;
   try {
+    /* POST. This one matters more than it looks: it tells the bridge a human is looking, which
+       SUPPRESSES critical notifications. As a GET, any page in any tab could hold that suppression
+       open indefinitely and silence the alerting this product exists to do. */
     fetch(API('/api/watching?view=' + encodeURIComponent(S.view || '')
-              + '&focus=' + (looking ? '1' : '0')), { method: 'GET', keepalive: true })
+              + '&focus=' + (looking ? '1' : '0')), { method: 'POST', keepalive: true })
       .catch(function(){});
   } catch {}
 }
@@ -6631,7 +8126,7 @@ RENDER.self=()=>{
   if(!el.dataset.built){
     el.dataset.built='1';
     el.innerHTML=`<div class="sfx" id="sfx">
-      <div class="sfx-meta">footprint · what this instrument costs · attributed by pid, every tick</div>
+      <div class="sfx-meta">${deskSwitch('self')}<span>what this instrument costs · attributed by pid, every tick</span></div>
       <div class="sfx-main">
         <div class="sfx-hero">
           <div class="sfx-say"><span id="sfCpu">–</span><small>% cpu now</small><span id="sfMb">–</span><small>MB private</small></div>
@@ -6647,6 +8142,14 @@ RENDER.self=()=>{
           <div class="sfx-chk">
             <div class="sfx-chk-h">does the instrument agree with itself<span id="sfChkCad">runs on a duty cycle</span></div>
             <div class="sfx-chk-g" id="sfChk"><div class="sfc"><span class="muted2">no comparison taken yet — the check runs on a duty cycle, not every tick.</span></div></div>
+          </div>
+          <!-- AI ACCESS. Full width, under the self-check, because it answers the same kind of
+               question one level out: that block asks "does the instrument agree with itself", this
+               one asks "what has an agent been told about this machine". A pending request is
+               time-sensitive, so it renders as the FIRST thing here rather than in a rail. -->
+          <div class="sfx-chk" id="sfAiWrap">
+            <div class="sfx-chk-h">what an AI has been told<span id="sfAiCad"></span></div>
+            <div id="sfAi"><span class="muted2">no agent has read anything from this machine.</span></div>
           </div>
           <div class="sfx-sprow"><canvas id="sfSpark"></canvas><span id="sfSparkLab"></span></div>
         </div>
@@ -6677,9 +8180,88 @@ RENDER.self=()=>{
       <div class="sfx-foot"><b>Method.</b> The WebView2 tree is walked from its vitals-webview root (child processes carry no marker of their own); the bridge is identified as the collector's parent pid — its command line says nothing. Same counters as every other page: Working Set — Private, Task Manager's cpu formula, % of all logical threads. <b>Metering adds zero extra counter reads</b> — it rides the per-process read each tick already performs; only the pid map refreshes, every 30 s. Episodic one-shots (reclaim sizing, io traces, MFT scans) are excluded: they run when you ask, then end. <b>These numbers include the cost of producing this page.</b></div>
     </div>`;
   }
-  paintCaps(); paintMode(); paintSelfCheck(); paintAlerts(); paintPersist();
+  wireRail();
+  paintCaps(); paintMode(); paintSelfCheck(); paintAlerts(); paintPersist(); paintAiAccess();
   if(S.tick) paintSelf(S.tick);
 };
+
+/* ===== THE RAIL ACCORDION (2026-08-01) =====
+   Why this exists is in the CSS above: six equal-share scrollers collapsed to their floor together
+   and hid 1,796 of 2,132px behind a scrollbar with no width. One section open at a time is what
+   makes the arithmetic work — six headers cost ~150px of a 596px column, and whichever section is
+   open gets the remaining ~440px instead of 56.
+
+   Two rules hold the honesty line that the old layout broke:
+   1. A COLLAPSED SECTION STILL STATES ITS VERDICT. The count and the summary live in the header,
+      so "intent only — nothing learned" and "3 unclassified" are equally visible when shut. You
+      lose the detail by closing a section, never the finding.
+   2. IF THE OPEN SECTION STILL OVERFLOWS, IT SAYS SO. `.more` fades the last line out. The bug
+      being fixed was not "content was clipped" — clipping is fine and sometimes necessary — it was
+      that the clip was INVISIBLE, which reads exactly like a section that has nothing more to say. */
+let RAIL_PAIRS = [];
+function railOpen(h){
+  RAIL_PAIRS.forEach(p=>{ const on=(p.h===h); p.h.classList.toggle('on',on); p.box.hidden=!on; });
+  /* SYNCHRONOUS, and this was measured the hard way: the first version deferred to
+     requestAnimationFrame and the fade never appeared on any section but the one open at load.
+     rAF does not fire while a tab is not compositing — which is the panel's NORMAL state when it is
+     docked, occluded or in the background, i.e. exactly when it is cheapest and most used.
+     A cue the reader relies on cannot be scheduled on a frame that may never come; reading
+     clientHeight here forces the layout we need anyway. */
+  railFade();
+}
+function railFade(){
+  RAIL_PAIRS.forEach(p=>{
+    if(p.box.hidden) return;
+    /* Below the fold AND not already at the bottom - the fade is a promise of more, so it has to
+       clear once there is no more, or it becomes decoration that always lies in the same direction. */
+    const over = p.box.scrollHeight - p.box.clientHeight > 4;
+    p.box.classList.toggle('more', over && p.box.scrollTop + p.box.clientHeight < p.box.scrollHeight - 4);
+  });
+}
+/* The count is what answers "is there more under here" at a glance. It is recomputed after every
+   paint because these sections are live: capabilities, alerts and the persist audit all change. */
+function railCounts(){
+  RAIL_PAIRS.forEach(p=>{
+    const n = p.box.querySelectorAll('.sfl,.sfc,.sfm').length;
+    let tag = p.h.querySelector('.sfx-n');
+    if(!tag){ tag=document.createElement('i'); tag.className='sfx-n'; p.h.appendChild(tag); }
+    tag.textContent = n ? String(n) : '';
+  });
+  railFade();
+}
+function wireRail(){
+  const rail=$('.sfx-rail'); if(!rail) return;
+  RAIL_PAIRS=[];
+  [...rail.children].forEach(el=>{
+    if(!el.classList.contains('rl')) return;
+    const box=el.nextElementSibling;
+    /* Pairs only. Cost-by-mode is followed by .sfx-fix, is pinned by design, and stays pinned. */
+    if(!box || !box.classList.contains('sfx-scr')) return;
+    RAIL_PAIRS.push({h:el, box});
+    if(el.dataset.wired) return;
+    el.dataset.wired='1';
+    el.classList.add('sfx-h');
+    /* WRAP THE TITLE so it can be told not to break. It is a bare text node, which cannot be
+       styled, so "what survives a restart" wrapped as "WHAT SURVIVES A / RESTART" the moment the
+       verdict and the count claimed enough of the 322px row. A section title broken mid-phrase
+       reads as a layout fault before it reads as a title; the verdict beside it is prose and can
+       wrap wherever it likes. */
+    for(const n of [...el.childNodes]){
+      if(n.nodeType===3 && n.textContent.trim()){
+        const t=document.createElement('em'); t.className='sfx-t'; t.textContent=n.textContent.trim();
+        el.replaceChild(t,n); break;
+      }
+    }
+    el.setAttribute('role','button'); el.tabIndex=0;
+    el.addEventListener('click',()=>railOpen(el));
+    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); railOpen(el); } });
+    box.addEventListener('scroll',railFade,{passive:true});
+  });
+  const already=RAIL_PAIRS.find(p=>!p.box.hidden && p.h.classList.contains('on'));
+  railOpen(already ? already.h : (RAIL_PAIRS[0]||{}).h);
+  railCounts();
+}
+addEventListener('resize',()=>{ if(RAIL_PAIRS.length) railFade(); });
 
 /* THE INSTALL'S OWN LIMITS, stated on the same page that states its cost. Someone looking at a
    missing gauge should be one click from the reason, and someone filing a bug from a Mac should be
@@ -6713,6 +8295,36 @@ async function paintMode(){
         casual poking. It is not a security boundary: anyone with a shell here can set the environment
         variable, edit <code>history/mode.json</code>, or delete the stored hash. A real boundary means
         running the bridge as an account the viewer cannot write as.</span></div>`;
+    /* ---- DEVELOPER MODE, beside the other permission the install has ----
+       Rendered here rather than in the AI block for two reasons: this container actually scrolls,
+       and this is the section that answers "what is this install permitted to do". Viewer/admin,
+       the passphrase, and the widest door belong in one place. */
+    let ai = null;
+    try{ ai = await (await fetch(API('/api/ai/access'))).json(); }catch{}
+    if(ai){
+      const on = ai.dev && ai.dev.on;
+      box.insertAdjacentHTML('beforeend',
+        `<div class="sfl"><b>Developer mode${on?' — OPEN':''}</b><span>`+
+        (on
+          ? `<span style="color:var(--warn)">Nothing an agent reads is redacted`+
+            `${ai.dev.minutesLeft!=null?`, for another ${ai.dev.minutesLeft} min`:''}.</span> `+
+            `It closes itself. <button class="aib" id="aiDevOff" style="margin-top:6px">Close it now</button>`
+          : `The widest permission here. It stops redacting <b>everything</b> an agent reads — `+
+            `identifiers, paths, adapter names — and exposes this install's own wiring, live state `+
+            `and error log so an agent can work <em>on</em> VITALS rather than with it.`+
+            `<br><br>Needs the admin passphrase and a confirmation, and closes itself after an hour.`+
+            (ai.hasPassphrase?'':` <b style="color:rgb(var(--t3))">Set a passphrase first — `+
+              `without one this is refused.</b>`)+
+            `<span class="aig-act">`+
+              (ai.hasPassphrase?`<input class="aip" id="aiDevPass" type="password" placeholder="admin passphrase">`:'')+
+              `<button class="aib" id="aiDevOn"${ai.hasPassphrase?'':' disabled'}>Turn on developer mode</button>`+
+              `<span id="aiDevMsg" class="muted2"></span>`+
+            `</span>`)+
+        `</span></div>`);
+      wireDevToggle();
+    }
+    railCounts();
+
     const sp=$('#setPass');
     if(sp) sp.onclick=async()=>{
       const askNew=['Enter a NEW admin passphrase.','',
@@ -6820,8 +8432,21 @@ async function paintSelfCheck(){
         `<div class="sfc-n">${name}</div>`+
         `<span class="sfc-m">${sysEsc(sc.method)} — the reference reads the same source, so a comparison could not fail and is not run.</span></div>`;
     }
+    /* A CROSS-CHECK WHOSE INDEPENDENCE WAS NEVER CHECKED is a weaker thing than one that was, and
+       the reader of this page is the person who needs to know. `independenceVerified === null` means
+       the claim came from the method description rather than from reading both syscalls — which is
+       exactly how the macOS uptime leg spent a release comparing os.uptime() with itself. */
+    /* INTERPOLATED INTO BOTH RETURNS BELOW, and the first version only reached the "waiting" one.
+       So the qualifier appeared exactly where nobody looks — on a card with no data — and vanished
+       the moment the check started producing results. Photographed proof from review: all three
+       cards read "AGREES" over 18 comparisons with no qualifier, including the two whose
+       independence is unverified. Carrying a fact onto a card that drops it is the same failure as
+       leaving it in a function nobody calls, one step further along. */
+    const assumed = (sc.independenceVerified == null)
+      ? `<span class="sfc-as" title="the two sources are DESCRIBED as different, but nobody has confirmed they reach the kernel by different routes on this platform">independence assumed, not confirmed</span>`
+      : '';
     if(!sc.samples){
-      return `<div class="sfc"><b style="color:var(--ink-3)">waiting</b><div class="sfc-n">${name}</div>`+
+      return `<div class="sfc"><b style="color:var(--ink-3)">waiting</b><div class="sfc-n">${name}</div>${assumed}`+
         `<span class="sfc-m">no comparison taken yet.</span></div>`;
     }
     const verdict = sc.healthy===true ? `<b style="color:var(--ok)">agrees</b>`
@@ -6830,12 +8455,269 @@ async function paintSelfCheck(){
     const body = sc.compare==='bound'
       ? `${sc.violations} violation${sc.violations===1?'':'s'} in ${sc.samples}<br>${sysEsc((sc.last&&sc.last.detail)||'')}`
       : `median ${num(sc.median)}${sc.unit==='%'?'%':' '+sc.unit} apart over ${sc.samples}<br>p95 ${num(sc.p95)}${sc.tolerance!=null?` · flags above ${sc.tolerance}`:''}`;
-    return `<div class="sfc">${verdict}<div class="sfc-n"><b style="font-weight:600;letter-spacing:0;text-transform:none;font-size:12px;color:var(--ink-2);display:inline">${name}</b> — ${body}</div>`+
+    return `<div class="sfc">${verdict}<div class="sfc-n"><b style="font-weight:600;letter-spacing:0;text-transform:none;font-size:12px;color:var(--ink-2);display:inline">${name}</b> — ${body}</div>${assumed}`+
       `<span class="sfc-m">${sysEsc(sc.method)}${sc.measured?`<br>measured: ${sysEsc(sc.measured)}`:''}</span></div>`;
   }).join('');
   box.innerHTML = cards || `<div class="sfc"><span class="sfc-m">nothing on this platform has an independent second source.</span></div>`;
 }
 
+
+/* ================= THE CONSENT PROMPT FOR AI IDENTIFIER ACCESS =================================
+ * An agent asking for this machine's identifiers gets stable local tags and a refusal until a human
+ * says otherwise. This is where the human says otherwise.
+ *
+ * WHY A PROMPT AND NOT A SETTING. A checkbox called "let AI see network identifiers" gets ticked
+ * once, during the one task that needed it, and stays ticked. A request that names WHICH tool
+ * asked, WHEN, and expires on its own is answerable on the evidence in front of you — and the safe
+ * state returns by itself, which is the only kind of safe state that survives contact with a
+ * working week.
+ * =========================================================================================== */
+/* The diff, shown before anything lands. Approval here approves THIS change and nothing else — the
+   apply route re-checks the content hash, so what is written is what was on screen. */
+function renderEditBanner(el, e, total, d){
+  el.hidden=false; el.className='ask edit';
+  const dif=e.diff||{};
+  const body = dif.tooBig
+    ? `<div class="aidiff muted2">${dif.note} (from line ${dif.changedFromLine||'?'})</div>`
+    : `<div class="aidiff">${(dif.hunks||[]).map(h=>sysEsc(h).split(String.fromCharCode(10)).map(l=>{
+        const c = l.startsWith('+')?'ad':l.startsWith('-')?'rm':'';
+        return `<div class="${c}">${l||' '}</div>`; }).join('')).join('<div class="gap">⋯</div>')}`+
+      `${dif.truncated?`<div class="muted2">…and ${dif.truncated} more hunk(s)</div>`:''}</div>`;
+  el.innerHTML =
+    `<b>An agent wants to change ${sysEsc(e.file)}</b>`+
+    `<span class="why">${e.why?sysEsc(e.why)+' — ':''}`+
+    `${dif.tooBig?'':`+${dif.added||0} / −${dif.removed||0} from line ${dif.atLine||1}. `}`+
+    `Nothing has been written. Approving applies <b>this</b> change only.`+
+    `${total>1?` (${total-1} more waiting.)`:''}</span>`+
+    body+
+    `<span class="acts">`+
+      (d&&d.hasPassphrase?`<input class="aip" id="aiEditPass" type="password" placeholder="admin passphrase">`:
+        `<span class="muted2">set an admin passphrase to approve edits</span>`)+
+      `<button class="aib go" id="aiEditOk"${d&&d.hasPassphrase?'':' disabled'}>Apply this change</button>`+
+      `<button class="aib" id="aiEditNo">Reject</button>`+
+      `<span id="aiEditMsg" class="muted2"></span></span>`;
+
+  const msg=$('#aiEditMsg');
+  const ok=$('#aiEditOk');
+  if(ok) ok.onclick=async()=>{
+    /* Two clicks here as well. The diff is on screen either way, but the second click is what makes
+       `confirm:true` an honest claim that it was read rather than that it was rendered. */
+    if(ok.dataset.armed!=='1'){ ok.dataset.armed='1'; ok.textContent='Yes — apply it';
+      if(msg) msg.innerHTML='<span style="color:var(--warn)">This writes to the file. The previous version is kept.</span>';
+      setTimeout(()=>{ if(ok.dataset.armed==='1'){ ok.dataset.armed='0'; ok.textContent='Apply this change'; if(msg) msg.textContent=''; } },12000);
+      return; }
+    ok.disabled=true; ok.textContent='applying…';
+    try{
+      const r=await (await fetch(API('/api/ai/edit/apply'),{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:e.id,confirm:true,pass:($('#aiEditPass')||{}).value||''})})).json();
+      if(r&&r.error){ ok.disabled=false; ok.dataset.armed='0'; ok.textContent='Apply this change';
+        if(msg) msg.innerHTML=`<span style="color:var(--crit)">${sysEsc(r.detail||r.error)}</span>`; return; }
+      toast(`${e.file} updated — previous version kept`,5000);
+    }catch(err){ ok.disabled=false; ok.textContent='failed'; return; }
+    paintAiBanner();
+  };
+  const no=$('#aiEditNo');
+  if(no) no.onclick=async()=>{ no.disabled=true;
+    try{ await fetch(API('/api/ai/edit/reject'),{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:e.id})}); }catch{}
+    paintAiBanner(); };
+}
+
+/* The banner: rendered on every page, from the same data the FOOTPRINT block uses, and polled on a
+   slow timer because a request that arrives while you are on another page still has to reach you.
+   30 s rather than the 1 Hz tick — a consent prompt is not telemetry and must not cost anything. */
+async function paintAiBanner(){
+  const el=$('#aiBanner'); if(!el) return;
+  let d; try{ d=await (await fetch(API('/api/ai/access'))).json(); }catch{ return; }
+  const grantOn = d.grant && d.grant.on, devOn = d.dev && d.dev.on;
+  const pend = (d.pending||[])[0];
+
+  /* A STAGED EDIT OUTRANKS EVERYTHING ELSE ON THIS BAR. An identifier request discloses something;
+     a proposed edit CHANGES the software, so it is the one that must not be scrolled past. */
+  let edits=[]; try{ edits=(await (await fetch(API('/api/ai/edits'))).json()).pending||[]; }catch{}
+  if(edits.length){ renderEditBanner(el, edits[0], edits.length, d); return; }
+
+  if(!grantOn && !devOn && !pend){ el.hidden=true; el.innerHTML=''; return; }
+  el.hidden=false;
+  el.className = grantOn||devOn ? 'live' : 'ask';
+
+  if(grantOn||devOn){
+    const via = grantOn ? d.grant.via : d.dev.via;
+    const left = grantOn && d.grant.minutesLeft!=null ? ` · ${d.grant.minutesLeft} min left` : '';
+    el.innerHTML = `<b>An agent is being given this machine's identifiers</b>`+
+      `<span class="why">${sysEsc(via||'')}${left}. MAC, IP, gateway, DNS and Wi-Fi name are `+
+      `included in answers until this expires — it closes by itself either way.</span>`+
+      `<span class="acts">${grantOn?'<button class="aib" id="aiBanRevoke">Revoke now</button>':''}`+
+      `<button class="aib" onclick="go('self')">See what it has read</button></span>`;
+    const r=$('#aiBanRevoke');
+    if(r) r.onclick=async()=>{ r.disabled=true;
+      try{ await fetch(API('/api/ai/revoke'),{method:'POST'}); }catch{}
+      paintAiBanner(); if(S.view==='self') paintAiAccess(); };
+    return;
+  }
+
+  /* A pending ask. It names the tool and the time, because approving should be a judgement about a
+     specific request rather than a standing permission. */
+  el.innerHTML = `<b>${sysEsc(pend.tool)} asked to see this machine's identifiers</b>`+
+    `<span class="why">Asked at ${new Date(pend.at).toLocaleTimeString()}. It was refused and given `+
+    `stable local tags instead, which is usually enough. Approving releases the real MAC, IP, `+
+    `gateway, DNS and Wi-Fi name for a limited window.</span>`+
+    `<span class="acts">`+
+      (d.hasPassphrase?`<input class="aip" id="aiBanPass" type="password" placeholder="passphrase">`:'')+
+      `<button class="aib go" data-mins="20">Approve 20 min</button>`+
+      `<button class="aib" data-mins="60">60 min</button>`+
+      `<button class="aib" id="aiBanNo">Not now</button></span>`;
+  /* TWO CLICKS, and the first one is the warning. `confirm:true` is only sent on the second, so the
+     flag genuinely means the consequence was on screen — the bridge cannot check that a human read
+     a sentence, so the panel has to be the thing that does not lie about it. */
+  el.querySelectorAll('.aib[data-mins]').forEach(b=>{
+    const label=b.textContent;
+    b.onclick=async()=>{
+      if(b.dataset.armed!=='1'){
+        b.dataset.armed='1'; b.textContent='Yes — release them';
+        const w=el.querySelector('.why');
+        if(w&&!w.dataset.warned){ w.dataset.warned='1';
+          w.innerHTML+=` <b style="color:var(--warn)">Are you sure? The real MAC, IP, gateway, DNS `+
+            `and Wi-Fi name go to this agent for ${b.dataset.mins} minutes.</b>`; }
+        setTimeout(()=>{ if(b.dataset.armed==='1'){ b.dataset.armed='0'; b.textContent=label; } },12000);
+        return;
+      }
+      b.disabled=true; b.textContent='approving…';
+      const pass=($('#aiBanPass')||{}).value||'';
+      try{
+        const r=await (await fetch(API('/api/ai/grant'),{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({minutes:+b.dataset.mins,pass,confirm:true,why:'approved from the panel'})})).json();
+        if(r&&r.error){ b.disabled=false; b.dataset.armed='0'; b.textContent=String(r.detail||r.error).slice(0,44); return; }
+      }catch(e){ b.disabled=false; b.textContent='failed'; return; }
+      paintAiBanner(); if(S.view==='self') paintAiAccess();
+    };
+  });
+  /* "Not now" hides it for this page-load only. It does NOT record a refusal: the request stays in
+     the log, and silence is already the answer — nothing was released. */
+  const no=$('#aiBanNo'); if(no) no.onclick=()=>{ el.hidden=true; };
+}
+
+/* The two-click arm-then-confirm, shared. Extracted because the toggle moved and a second copy of
+   "show the warning before sending confirm:true" is a second chance to get it wrong. */
+function wireDevToggle(){
+  const devOff=$('#aiDevOff');
+  if(devOff) devOff.onclick=async()=>{
+    devOff.disabled=true;
+    try{ await fetch(API('/api/ai/devoff'),{method:'POST'}); }catch{}
+    paintMode(); paintAiBanner();
+  };
+  const devOn=$('#aiDevOn');
+  if(devOn) devOn.onclick=async()=>{
+    const msg=$('#aiDevMsg');
+    if(devOn.dataset.armed!=='1'){
+      devOn.dataset.armed='1'; devOn.textContent='Yes — turn it on';
+      if(msg) msg.innerHTML=`<span style="color:var(--warn)">Are you sure? Every answer an agent `+
+        `gets will contain this machine's real identifiers and internals until it expires.</span>`;
+      setTimeout(()=>{ if(devOn.dataset.armed==='1'){ devOn.dataset.armed='0';
+        devOn.textContent='Turn on developer mode'; if(msg) msg.textContent=''; } },12000);
+      return;
+    }
+    devOn.disabled=true; devOn.textContent='opening…';
+    try{
+      const r=await (await fetch(API('/api/ai/dev'),{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({pass:($('#aiDevPass')||{}).value||'',confirm:true,minutes:60,
+                             why:'opened from the panel'})})).json();
+      if(r&&r.error){ devOn.disabled=false; devOn.dataset.armed='0';
+        devOn.textContent='Turn on developer mode';
+        if(msg) msg.innerHTML=`<span style="color:var(--crit)">${sysEsc(r.detail||r.error)}</span>`; return; }
+    }catch(e){ devOn.disabled=false; devOn.textContent='failed'; return; }
+    paintMode(); paintAiBanner();
+  };
+}
+
+async function paintAiAccess(){
+  const box=$('#sfAi'); if(!box) return;
+  let d; try{ d=await (await fetch(API('/api/ai/access'))).json(); }catch{ return; }
+  const cad=$('#sfAiCad');
+  const s=d.summary||{};
+  if(cad) cad.textContent = s.reads
+    ? `${s.reads} read${s.reads===1?'':'s'} · ${s.readsWithIdentifiers} with identifiers`
+    : 'nothing read yet';
+
+  const when=t=>t?new Date(t).toLocaleTimeString():'';
+  const rows=[];
+
+  /* A live grant is stated first and loudly: while it is open, answers leave with real values in
+     them, and that is the single most important fact on this panel. */
+  if(d.grant&&d.grant.on){
+    rows.push(`<div class="sfl aig-on"><b>identifiers are being released</b><span>`+
+      `${sysEsc(d.grant.via||'')}${d.grant.minutesLeft!=null?` · ${d.grant.minutesLeft} min left`:''}. `+
+      `Answers to this agent include the real MAC, IP, gateway, DNS and SSID until it expires.`+
+      ` <button class="aib" id="aiRevoke">Revoke now</button></span></div>`);
+  }
+  if(d.dev&&d.dev.on){
+    rows.push(`<div class="sfl aig-on"><b>developer mode is open</b><span>${sysEsc(d.dev.via||'')} — `+
+      `nothing is redacted while this lasts.</span></div>`);
+  }
+
+  /* PENDING REQUESTS. Each names the tool and the time, so approving is a judgement about a
+     specific ask rather than a blanket permission. */
+  if((d.pending||[]).length){
+    for(const r of d.pending.slice(0,3)){
+      rows.push(`<div class="sfl aig-ask"><b>${sysEsc(r.tool)} asked for identifiers</b><span>`+
+        `at ${when(r.at)} — it was refused and given stable tags instead. `+
+        `Approving releases the real values for a limited window.`+
+        `<span class="aig-act">`+
+          (d.hasPassphrase?`<input class="aip" id="aiPass" type="password" placeholder="passphrase">`:'')+
+          `<button class="aib go" data-mins="20">Approve 20 min</button>`+
+          `<button class="aib" data-mins="60">60 min</button>`+
+        `</span></span></div>`);
+    }
+  } else if(!(d.grant&&d.grant.on)){
+    rows.push(`<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">nothing is being asked for</b>`+
+      `<span>Identifiers — MAC, IP, gateway, DNS, Wi-Fi name — are replaced with stable local tags `+
+      `before any answer leaves this machine. A tag is the same every time for the same value, so an `+
+      `agent can tell whether something <b>changed</b> without being told what it is.</span></div>`);
+  }
+
+  /* Developer mode's toggle is NOT here — it lives in the mode section of the rail, beside viewer/
+     admin and the passphrase, because that is where "what is this install allowed to do" is
+     answered. It was here first and was unreachable: this column is a fixed canvas, so the button
+     rendered at y=941 in a 720 px window on a page whose scrollHeight equalled its clientHeight.
+     Present in the DOM, impossible to click. Third time this page has taught that lesson. */
+
+  /* The reads themselves: what was called, and whether anything left with identifiers in it. */
+  const recent=(d.recent||[]).filter(r=>r.ev==='read').slice(0,6);
+  if(recent.length){
+    rows.push(`<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">recent reads</b><span>`+
+      recent.map(r=>`${when(r.at)} · ${sysEsc(r.tool)}`+
+        (r.dev||r.granted?` <em class="aig-raw">included identifiers</em>`
+         : r.redacted?` · ${r.redacted} tagged`:'')).join('<br>')+
+      `</span></div>`);
+  }
+  box.innerHTML=rows.join('');
+
+  const post=async(path,body)=>{
+    try{ const r=await fetch(API(path),{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body||{})}); return await r.json(); }catch(e){ return {error:e.message}; }
+  };
+  const rev=$('#aiRevoke');
+  if(rev) rev.onclick=async()=>{ rev.disabled=true; await post('/api/ai/revoke'); paintAiAccess(); paintAiBanner(); };
+  /* The developer-mode toggle moved to the mode section (see wireDevToggle) — this block used to
+     duplicate it, and a second copy of "show the warning before sending confirm:true" is a second
+     chance to get that wrong. One implementation, one place. */
+  box.querySelectorAll('.aib[data-mins]').forEach(b=>{
+    const label=b.textContent;
+    b.onclick=async()=>{
+      if(b.dataset.armed!=='1'){
+        b.dataset.armed='1'; b.textContent='Yes — release them';
+        setTimeout(()=>{ if(b.dataset.armed==='1'){ b.dataset.armed='0'; b.textContent=label; } },12000);
+        return;
+      }
+      const pass=($('#aiPass')||{}).value||'';
+      b.disabled=true; b.textContent='approving…';
+      const r=await post('/api/ai/grant',{minutes:+b.dataset.mins,pass,confirm:true,why:'approved from the panel'});
+      if(r&&r.error){ b.disabled=false; b.dataset.armed='0'; b.textContent=String(r.detail||r.error).slice(0,44); return; }
+      paintAiAccess(); paintAiBanner();
+    };
+  });
+}
 
 /* B4 on the page: what the machine will interrupt you for, whether it CAN, and a way to find out
    before the incident rather than during it. The rules are printed rather than described, because
@@ -6866,6 +8748,33 @@ async function paintAlerts(){
         +'Critical findings only, and only after one has <span style="color:var(--ink-2);font-weight:600">held for '+(r.sustainSec||90)+' s</span>. '
         +'At most one alert per finding every '+(r.cooldownHours||6)+' h, and never two within '+(r.minGapMin||15)+' min of each other. '
         +'Nothing is sent while you are looking at the diagnosis.</span></div>')
+    /* WHAT `capable` ACTUALLY MEANS, ON THE PAGE. The bridge has carried `capableMeans` and
+       `deliveryVerified` since review; nothing rendered them, so the panel still showed a bare
+       green "toast (Windows notification centre)" while the module behind it knew perfectly well
+       that it had only established a CHANNEL, not a delivery. The distinction was bought and then
+       left in the JSON. It matters to exactly the person reading this rail: someone deciding
+       whether to rely on being told. */
+    +(d.capable && d.capableMeans
+      ? '<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">What that means</b><span>'
+        +sysEsc(d.capableMeans)
+        +(d.deliveryVerifiedMeans
+          ? ' <span style="color:var(--ink-2)">'+sysEsc(d.deliveryVerifiedMeans)+'</span>'
+          : '')
+        +'</span></div>'
+      : '')
+    /* A MISCONFIGURED HOST, NAMED. This is what "the host declined it" was hiding: the bridge was
+       handing the notifier a boolean instead of the PowerShell path, so every send spawned a program
+       called "true". Six failures a minute and not one sentence anywhere saying why. */
+    +(d.psHostProblem
+      ? '<div class="sfl"><b style="font-weight:500;color:rgb(var(--t3))">Misconfigured</b><span>'
+        +sysEsc(d.psHostProblem)+' — notifications cannot be sent until this is corrected.</span></div>'
+      : '')
+    /* A FAILED SEND OUTRANKS THE PROBE, and is the only hard evidence this ever gets. */
+    +(d.lastDeliveryFailedAt && (!d.lastDeliveryOkAt || d.lastDeliveryFailedAt > d.lastDeliveryOkAt)
+      ? '<div class="sfl"><b style="font-weight:500;color:rgb(var(--warn))">A send failed</b><span>'
+        +'The last attempt, at '+sysEsc(new Date(d.lastDeliveryFailedAt).toLocaleString())+', did not go through. '
+        +'That is stronger evidence than the capability check above, which only ever asks whether a channel exists.</span></div>'
+      : '')
     +'<div class="sfl"><b style="font-weight:500;color:var(--ink-2)">Last alert</b><span>'+sysEsc(last)+'</span></div>'
     +(recent||'<div class="sfl"><span class="muted2">nothing sent or withheld yet.</span></div>')
     +'<div class="sfl"><button id="sfAlTest" style="font:inherit;font-size:11px;color:var(--ink-2);cursor:pointer;background:var(--gl-1);border:1px solid var(--line-2);border-radius:999px;padding:4px 12px">Send a test notification</button>'
@@ -6875,7 +8784,7 @@ async function paintAlerts(){
   if(t) t.onclick=async()=>{
     t.disabled=true; t.textContent='sending…';
     try{
-      const r2=await (await fetch(API('/api/alerts/test'))).json();
+      const r2=await (await fetch(API('/api/alerts/test'), {method:'POST'})).json();
       /* Reports what actually happened. "Sent" when the host accepted it and an honest failure
          otherwise — a test button that always says "sent" tests nothing. */
       t.textContent = r2.ok ? 'sent — check your notifications' : 'the host refused it';
@@ -6887,6 +8796,7 @@ async function paintAlerts(){
     try{ await fetch(API('/api/alerts?on='+(d.enabled?'0':'1')),{method:'POST'}); }catch{}
     paintAlerts();
   };
+  railCounts();
 }
 
 /* A6 on the page. Intent is listed because a user is entitled to know what the app remembers about
@@ -6904,6 +8814,10 @@ function paintPersist(){
   const box=$('#sfPersist'); if(!box) return;
   const a=persistAudit();
   const v=$('#sfPsVerdict');
+  /* The verdict is the load-bearing part of this section and it belongs in the header, where it is
+     readable with the list SHUT. "intent only" is the claim that every surviving byte is a choice
+     you made rather than a conclusion the machine reached about you - the difference between a
+     monitor that remembers your theme and one that quietly accumulates a model of its owner. */
   if(v) v.textContent = a.clean ? 'intent only — nothing learned' : a.rows.filter(r=>r.classified!=='intent').length+' unclassified';
   box.innerHTML = a.rows.length
     ? a.rows.map(function(r){
@@ -6912,6 +8826,7 @@ function paintPersist(){
           +(bad?' · unclassified':'')+'</b><span>'+sysEsc(r.what)+' · '+r.bytes+' bytes</span></div>';
       }).join('')
     : '<div class="sfl"><span class="muted2">nothing is persisted yet.</span></div>';
+  railCounts();
 }
 
 function paintCaps(){
@@ -6929,6 +8844,7 @@ function paintCaps(){
     `<div class="sfl">${verdict}</div>`+
     (lim||mis ? lim+mis
       : `<div class="sfl"><b>Nothing withheld</b><span>every feature this panel can draw is measurable on this host.</span></div>`);
+  railCounts();
 }
 
 /* ============ FX — the light & sound desk (2026-07-29) ============
@@ -7108,7 +9024,7 @@ RENDER.fx=()=>{
   if(!el.dataset.built){
     el.dataset.built='1';
     el.innerHTML=`
-    <div class="xhead"><b>FX</b><span class="tag0">the light &amp; sound desk — every effect marks a measured event; nothing loops, nothing pretends</span>
+    <div class="xhead">${deskSwitch('fx')}<span class="tag0">the light &amp; sound desk — every effect marks a measured event; nothing loops, nothing pretends</span>
       <div class="xkpi"><span>look <b id="fxLookK">–</b></span><span>bus <b id="fxBusK">–</b></span></div></div>
     <div class="looks" id="fxLooks">${Object.keys(LOOKS).map(n=>{const L=LOOKS[n];
       return `<div class="lk" data-lk="${n}" style="background:${L.bg}">
@@ -7215,7 +9131,7 @@ RENDER.rig=()=>{
   if(!el.dataset.built){
     el.dataset.built='1';
     el.innerHTML=`
-    <div class="xhead"><b>RIG</b><span class="tag0">orchestration: every control is live, every cost was measured before it was claimed</span>
+    <div class="xhead">${deskSwitch('rig')}<span class="tag0">orchestration: every control is live, every cost was measured before it was claimed</span>
       <div class="xkpi"><span>instrument now <b id="rgSelf">–</b></span><span>tick <b id="rgHz">–</b></span><span>mode <b id="rgMode">–</b></span></div></div>
     <div class="xgrid" style="margin-top:2px">
       <div class="xcol">
@@ -7463,6 +9379,22 @@ async function pollDiagnosis(){
     const b=$('#diagBadge');
     if(b){ b.textContent=n>9?'9+':n; b.classList.toggle('on',n>0);
            b.style.background=d.counts&&d.counts.critical?'var(--crit)':'var(--warn)'; }
+    /* THE PROPOSAL BADGE, on the same poll. The disruptive tier's entire promise is "armed means it
+       asks" — and until this was wired the asking channel was an in-memory array on a page you have
+       no reason to open. Review named it exactly right: an unhearable ask is indistinguishable from
+       an automation that silently does not work, which is the failure this product exists to refuse.
+       Cheap because it rides a request that was already being made every few seconds. */
+    try{
+      const ab=$('#autoBadge');
+      if(ab){
+        /* ?counts=1 — the badge needs one integer, and the full payload costs four whole reads of
+           the outcomes ledger to build evidence nothing here renders. */
+        const a=await (await fetch(API('/api/automations?counts=1'))).json();
+        const q=a.proposals||0;
+        ab.textContent=q>9?'9+':q; ab.classList.toggle('on',q>0);
+        ab.style.background='var(--warn)';   // a question, never a critical: it is waiting, not failing
+      }
+    }catch{}
     /* The SHORT form on every compact surface. `summary` is findings[0].title, i.e. the full sentence
        with its trailing clause; on the overview and the topbar strip that clause wraps to a second and
        third line inside the ring. The engine already derives the short version, so use it. */
@@ -7764,6 +9696,10 @@ try{
   if(qp.get('open')==='battcurve') setTimeout(()=>{const b=document.querySelector('#bRep'); if(b) b.click();},2500);
 }catch{}
 wireWindow(); $('#wTop').style.color='var(--cpu)';
+/* The consent banner runs on its own slow clock, independent of the page you happen to be on: a
+   request arriving while you are looking at the disk page still has to reach you. 30 s, not the
+   1 Hz tick — a permission prompt is not telemetry and must not cost anything measurable. */
+paintAiBanner(); setInterval(paintAiBanner, 30_000);
 // Esc undocks as well as returning to the overview; Ctrl+arrows dock without dragging.
 addEventListener('keydown',e=>{
   /* Escape inside a text field means "I am done with this field", not "undock the window". */

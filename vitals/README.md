@@ -50,6 +50,14 @@ What you get:
 - **Live telemetry** — per-core CPU, memory with honest cache accounting, per-process CPU/memory,
   disk and network rates, GPU, battery health — drawn as trailing rings that show the last few
   minutes, not the instant you happened to glance.
+- **Automations that have to be earned** ([`automate.js`](automate.js)) — nothing is offered
+  that this machine has not already watched you do by hand, and measure. A candidate appears only
+  once the outcomes ledger shows all three: the situation recurred, you answered it *that* way while
+  it was firing, and the median measured benefit cleared a floor. Read-only maintenance is offered
+  outright; anything that changes the machine must be earned; anything **disruptive is armed to
+  ASK, never to act**. Each one is held to the same floor forever and disarms itself when it stops
+  paying — scored per incident, not per run, so a cleanup that worked is not punished for the empty
+  runs that follow it.
 - **A diagnosis engine** ([`diagnose.js`](diagnose.js)) that ranks findings by *consequence*, not by
   the biggest number. Every rule tests a **sustained** condition against minutes of history — a CPU
   spike is a process starting; ninety seconds of it is a problem. Compound rules outrank their
@@ -80,11 +88,11 @@ link downloads directly; unpack it and run Setup.
 
 | | Download | Size | Then |
 |---|---|---|---|
-| **Windows** | **[⬇ vitals-0.9.2-win-x64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-win-x64.zip)** | 35 MB | Extract → double-click **`Setup.cmd`** |
-| Windows on ARM | [⬇ vitals-0.9.2-win-arm64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-win-arm64.zip) | 31 MB | Extract → double-click **`Setup.cmd`** |
-| **macOS** (M1–M4) | **[⬇ vitals-0.9.2-mac-arm64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-mac-arm64.tar.gz)** | 39 MB | `tar -xzf …`, then `./setup.sh` |
-| macOS (Intel) | [⬇ vitals-0.9.2-mac-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-mac-x64.tar.gz) | 40 MB | `tar -xzf …`, then `./setup.sh` |
-| **Linux** | **[⬇ vitals-0.9.2-linux-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/vitals-0.9.2-linux-x64.tar.gz)** | 44 MB | `tar -xzf …`, then `./setup.sh` |
+| **Windows** | **[⬇ vitals-0.9.9-win-x64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/vitals-0.9.9-win-x64.zip)** | 35 MB | Extract → double-click **`Setup.cmd`** |
+| Windows on ARM | [⬇ vitals-0.9.9-win-arm64.zip](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/vitals-0.9.9-win-arm64.zip) | 31 MB | Extract → double-click **`Setup.cmd`** |
+| **macOS** (M1–M4) | **[⬇ vitals-0.9.9-mac-arm64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/vitals-0.9.9-mac-arm64.tar.gz)** | 39 MB | `tar -xzf …`, then `./setup.sh` |
+| macOS (Intel) | [⬇ vitals-0.9.9-mac-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/vitals-0.9.9-mac-x64.tar.gz) | 40 MB | `tar -xzf …`, then `./setup.sh` |
+| **Linux** | **[⬇ vitals-0.9.9-linux-x64.tar.gz](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/vitals-0.9.9-linux-x64.tar.gz)** | 44 MB | `tar -xzf …`, then `./setup.sh` |
 
 <details>
 <summary><b>Not sure which one?</b></summary>
@@ -101,7 +109,7 @@ anything, because there is no installer.
 </details>
 
 Every bundle is listed with its SHA-256 in
-[`SHA256SUMS.txt`](https://github.com/bmconsult/public/releases/download/vitals-v0.9.2/SHA256SUMS.txt),
+[`SHA256SUMS.txt`](https://github.com/bmconsult/public/releases/download/vitals-v0.9.9/SHA256SUMS.txt),
 and the build is reproducible — rebuild from source with `node bundle.js` and you get the same hashes.
 
 > On macOS and Linux use the `.tar.gz` — zip does not carry the executable bit.
@@ -129,7 +137,7 @@ actually produced telemetry before reporting success.
 
 ## Platform support, honestly
 
-This is version **0.9.2**, and pre-1.0 on purpose. The version number is doing the same job as
+This is version **0.9.9**, and pre-1.0 on purpose. The version number is doing the same job as
 everything else here: describing what was actually verified.
 
 Counts below come from the capability manifest itself, not from a summary of it — 33 capabilities,
@@ -199,12 +207,20 @@ is possible.
   the router refuses and the panel hides controls as a consequence. Viewer also withholds anything
   that names your files and strips paths and account names from findings. It is a guardrail, not a
   security boundary, and the docs say exactly where the boundary actually is.
+- **The screen read is the one thing that looks outside the app, and it is gated accordingly.** The
+  FX pin-sketch can reconstruct what is behind the window as dots. It is OFF by default; turning it
+  on needs the admin passphrase, an explicit confirmation, and a duration that expires by itself. The
+  permission is a **token scoped to one caller**, held in memory — there is no file to forge, a
+  restart closes it, and a window opened by one client does not make the screen readable by another.
+  The capture is 64x24 colour, capped in code rather than promised in a comment, never written to
+  disk, and every sample is counted where you can see it. Two test suites defend that gate: one reads
+  the source, one drives a real bridge, and each catches escapes the other misses.
 - **Support bundles are allowlists** — logs and metrics, never your clipboard, key, or file
   listings, with a manifest stating exactly what went in.
 
 ## Testing
 
-Seven suites, and [INSTALL.md](INSTALL.md#testing-a-collector) is explicit about what a pass in each
+**24 suites, 1,100 checks**, and [INSTALL.md](INSTALL.md#testing-a-collector) is explicit about what a pass in each
 actually proves — parser fixtures prove field offsets, live suites prove reality, stimulus suites
 prove the numbers move.
 

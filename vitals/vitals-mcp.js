@@ -45,6 +45,26 @@ const PORT = (() => {
   return +process.env.VITALS_PORT || 8790;
 })();
 const ALLOW_ACTIONS = argv.includes('--allow-actions');
+/* --dev hands answers over UNREDACTED for the life of this process. A human types it; an agent
+   cannot. See aiaccess.js for why the file form expires and this one does not need to. */
+const DEV_FLAG = argv.includes('--dev');
+
+const { redact } = require('./redact');
+const { AiAccess } = require('./aiaccess');
+/* The log lives beside the other ledgers. If the directory is missing the recorder degrades to a
+   no-op rather than taking the server down — a broken log must not break the tool it observes. */
+const access = new AiAccess(path.join(__dirname, 'history'), { devFlag: DEV_FLAG });
+
+/* Arguments are recorded, but a future tool could take a passphrase, so the same shape rule applies
+   here as everywhere else: log what was asked for, not secrets that rode along. */
+function safeArgs(a) {
+  const out = {};
+  for (const [k, v] of Object.entries(a || {})) {
+    if (/pass|secret|token|key/i.test(k)) { out[k] = '[omitted]'; continue; }
+    out[k] = typeof v === 'string' && v.length > 120 ? v.slice(0, 120) + '…' : v;
+  }
+  return out;
+}
 const VITALS_VERSION = (() => {
   try { return require('./package.json').version; } catch { return '0.0.0-unknown'; }
 })();
@@ -161,7 +181,27 @@ const GET = (p) => withBridge(() => call('GET', p));
 const POST = (p, b) => withBridge(() => call('POST', p, b));
 
 /* ---------- tools ---------- */
-const S = (props = {}, required = []) => ({ type: 'object', properties: props, required, additionalProperties: false });
+/* EVERY TOOL GETS `identifiers`, injected here rather than written on each one.
+ *
+ * Two reasons it belongs in the helper. `additionalProperties: false` means a strict client REJECTS
+ * an undeclared argument, so an opt-in that is not in the schema is not an opt-in at all — it is a
+ * flag the model is told about in prose and then forbidden from using. And declaring it per tool
+ * is the same arrangement that let `vitals_network` be the one place redaction was forgotten: any
+ * list a human maintains beside a set of tools will eventually disagree with it. */
+const S = (props = {}, required = []) => ({
+  type: 'object',
+  properties: {
+    ...props,
+    identifiers: {
+      type: 'boolean',
+      description: 'Include this machine\'s identifiers — MAC, IP, gateway, DNS, Wi-Fi SSID, ' +
+                   'hostname, username — which are withheld by default. Ask only when the task ' +
+                   'genuinely needs them; the request is recorded in the access log either way.',
+    },
+  },
+  required,
+  additionalProperties: false,
+});
 
 const READ_TOOLS = [
   {
@@ -332,7 +372,99 @@ const ACTION_TOOLS = [
   },
 ];
 
-const TOOLS = ALLOW_ACTIONS ? [...READ_TOOLS, ...ACTION_TOOLS] : READ_TOOLS;
+/* ---- DEVELOPER TOOLS -------------------------------------------------------------------------
+ * Present in the list always, refusing unless developer mode is open. Hiding them until the window
+ * opens was the first design and it is worse: tools/list is read once at connection, so an agent
+ * that had dev mode granted mid-session would never learn these exist, and the refusal message is
+ * where it finds out how to ask. Their NAMES are not the secret; what they return is.
+ *
+ * The brief they are built to: less than a person needed to build VITALS, only what that person
+ * needed, but everything required to interpret what it is doing and iterate on it. So: no shell, no
+ * file contents, no writes — structure, live numbers, and what has actually gone wrong.
+ * ------------------------------------------------------------------------------------------- */
+const { wiring, errors } = require('./devtools');
+const { readSource, writeSource, proposeEdit, classify } = require('./devedit');
+const HIST = path.join(__dirname, 'history');
+
+const DEV_TOOLS = [
+  {
+    name: 'vitals_dev_state',
+    description:
+      'DEVELOPER MODE ONLY. Every live number at once, unformatted and unredacted: the raw tick as ' +
+      'the collector emitted it, plus what each subsystem currently believes — the diagnosis, the ' +
+      'governor, the scheduler, the self-check, the capability manifest. The single call to make ' +
+      'when the question is "what does it actually think right now".',
+    inputSchema: S({}),
+    run: async () => {
+      const [latest, diag, gov, sched, self, caps] = await Promise.all([
+        GET('/api/latest').catch((e) => ({ error: e.message })),
+        GET('/api/diagnose').catch((e) => ({ error: e.message })),
+        GET('/api/governor').catch((e) => ({ error: e.message })),
+        GET('/api/schedule').catch((e) => ({ error: e.message })),
+        GET('/api/selfcheck').catch((e) => ({ error: e.message })),
+        GET('/api/caps').catch((e) => ({ error: e.message })),
+      ]);
+      return { what: 'the live state, unformatted — developer mode', tick: latest,
+               diagnosis: diag, governor: gov, scheduler: sched, selfCheck: self, capabilities: caps };
+    },
+  },
+  {
+    name: 'vitals_dev_wiring',
+    description:
+      'DEVELOPER MODE ONLY. The map of this install, derived from the source at read time: every ' +
+      'route with the line it is declared on and whether it is POST-only, every module with its ' +
+      'own one-line summary, the PowerShell scripts, the test suites, and the data path from ' +
+      'counter to panel. Names, paths and line numbers — NOT file contents.',
+    inputSchema: S({}),
+    run: async () => wiring(),
+  },
+  {
+    name: 'vitals_dev_read',
+    description:
+      'DEVELOPER MODE ONLY. Read one of this install\'s own source files. Scope is the vitals ' +
+      'folder and source extensions only — history/ is the machine\'s recorded data, not the ' +
+      'software, and is not readable here. Returns the file with its risk tier, so you know before ' +
+      'you edit whether a change will land directly or need the owner to approve it.',
+    inputSchema: S({ file: { type: 'string', description: 'path relative to the vitals folder, e.g. "diagnose.js"' } }, ['file']),
+    run: async (a) => readSource(a.file),
+  },
+  {
+    name: 'vitals_dev_write',
+    description:
+      'DEVELOPER MODE ONLY. Change one of this install\'s source files. What happens depends on the ' +
+      'file: NORMAL files (docs, tests, leaf modules) are written straight away, backed up first and ' +
+      'syntax-checked before the old bytes are replaced. RISKY files (bridge.js, the panel, anything ' +
+      'PowerShell) are PROPOSED, not written — the owner sees the actual diff in the panel and ' +
+      'approves that specific change. GUARDED files (the redaction, access-log and tool-surface code, ' +
+      'and their suites) are refused at every level, because an agent editing its own constraints is ' +
+      'the failure this whole subsystem exists to prevent. Nothing outside the vitals folder is ' +
+      'reachable, and content that does not parse is rejected before anything is overwritten.',
+    inputSchema: S({
+      file: { type: 'string', description: 'path relative to the vitals folder' },
+      content: { type: 'string', description: 'the COMPLETE new contents of the file' },
+      why: { type: 'string', description: 'one line the owner will read next to the diff' },
+    }, ['file', 'content']),
+    run: async (a) => {
+      const tier = classify(a.file);
+      /* Normal files land; anything riskier becomes a proposal a human answers. Deciding here rather
+         than in the tool description means an agent cannot pick the gentler path by asking for it. */
+      return tier === 'normal' ? writeSource(a.file, a.content)
+                               : proposeEdit(a.file, a.content, a.why);
+    },
+  },
+  {
+    name: 'vitals_dev_errors',
+    description:
+      'DEVELOPER MODE ONLY. What has actually gone wrong recently, gathered from the journal and ' +
+      'the host logs into one list. Answers "is it broken, and where" without reading three files. ' +
+      'An empty result is a real answer — it means nothing has failed, not that nothing was read.',
+    inputSchema: S({ n: { type: 'number', description: 'how many to return (default 40)' } }),
+    run: async (a) => errors(HIST, Math.max(1, Math.min(200, +a.n || 40))),
+  },
+];
+
+const TOOLS = (ALLOW_ACTIONS ? [...READ_TOOLS, ...ACTION_TOOLS] : READ_TOOLS).concat(DEV_TOOLS);
+const DEV_NAMES = new Set(DEV_TOOLS.map((t) => t.name));
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
 /* ---------- JSON-RPC over stdio ---------- */
@@ -380,8 +512,88 @@ async function handle(m) {
       });
     }
     try {
-      const out = await t.run((params && params.arguments) || {});
-      return ok(id, { content: [{ type: 'text', text: JSON.stringify(out, null, 1) }] });
+      const args = (params && params.arguments) || {};
+
+      /* A developer tool refuses unless the window is open, and the refusal is where an agent
+         learns the mechanism exists at all. Recorded like any other call, so a burst of attempts
+         shows up in the log rather than only in the model's context. */
+      if (DEV_NAMES.has(name) && !access.dev().on) {
+        access.record({ tool: name, args: safeArgs(args), bytes: 0, redacted: 0, kinds: [],
+                        identifiers: false, refused: 'developer mode is closed' });
+        return ok(id, { isError: true, content: [{ type: 'text', text:
+          `${name} needs developer mode, which is closed. It is the widest permission VITALS has — ` +
+          'it stops redacting anything and exposes this install\'s internals — so the owner opens ' +
+          'it deliberately in the panel: a toggle, the admin passphrase, an explicit confirmation, ' +
+          'and it closes itself after an hour. Nothing here can open it for you.' }] });
+      }
+
+      const out = await t.run(args);
+
+      /* ---- THE ONE SEAM. Redaction and the access log both live here, after every tool and before
+         every reply, so a tool added later inherits both without its author having to remember. The
+         alternative — redacting inside each `run` — is precisely the arrangement that produced the
+         defect this fixes: `vitals_network` simply never did it. ---- */
+      const dev = access.dev();
+      /* ASKING IS NOT GRANTING. `identifiers:true` is a request the agent makes; `grant` is the
+         answer a HUMAN gave. Only the second one discloses anything — otherwise the rule would be
+         "leaks whenever an agent decides it needs to", which is the original problem with a step
+         in front of it. The request is recorded whether or not it was honoured. */
+      const asked = args.identifiers === true;
+      const granted = access.grant();
+      /* DEVELOPER MODE DOES NOT BLANKET-UNREDACT, and the first version did exactly that.
+       *
+       * `raw = dev.on || …` meant every ordinary call — a process list, a diagnosis — came back
+       * unredacted for the whole hour, whether or not the task had anything to do with identifiers.
+       * That is exposure for no reason: the developer opened a door to work ON the software and got
+       * a machine that volunteered its own details on every unrelated question.
+       *
+       * What developer mode actually buys is the DEV TOOLS, which return internals because that is
+       * their entire purpose and because asking for one is a deliberate act. Everything else stays
+       * redacted. A developer who genuinely needs an ordinary tool unredacted passes
+       * `identifiers:true` — and developer mode already implies the grant, so it costs one argument
+       * rather than another prompt. Needed and asked for, instead of always. */
+      const isDevTool = DEV_NAMES.has(name);
+      const raw = isDevTool || (asked && (granted.on || dev.on));
+
+      let payload = out, removed = 0, kinds = [];
+      if (!raw) {
+        const r = redact(out);
+        payload = r.value; removed = r.count; kinds = r.kinds;
+      }
+      const text = JSON.stringify(payload, null, 1);
+      access.record({ tool: name, args: safeArgs(args), bytes: text.length,
+                      redacted: removed, kinds,
+                      identifiers: asked, granted: asked ? !!granted.on : undefined });
+
+      /* THE MODEL IS TOLD WHEN SOMETHING WAS WITHHELD, and how to ask for it. Silent redaction
+         would leave it reasoning over holes it cannot see — the same failure as a plausible zero,
+         one layer up. `[redacted:mac]` says a MAC exists; this says how to get it. */
+      /* A REFUSED REQUEST IS ALWAYS ANSWERED, even when there was nothing to withhold. The first
+         version only spoke when `removed > 0`, so an agent that asked for identifiers on a payload
+         which happened to contain none got silence — learning nothing about the refusal, the
+         mechanism, or how to get an answer. Being told "no, and here is how to ask properly" is the
+         entire point; going quiet because the payload was boring throws it away. */
+      const note = raw
+        ? (isDevTool
+          ? `\n\n[developer tool — returned in full (${dev.via}). Ordinary tools stay redacted ` +
+            'unless you pass identifiers:true; developer mode does not change that.]'
+          : `\n\n[identifiers were included — you asked, and ${dev.on ? dev.via : granted.via}.]`)
+        : (asked && !removed)
+          ? '\n\n[you asked for this machine\'s identifiers. No human has approved that, so nothing ' +
+            'was released — and this particular answer contained none anyway. The request is on the ' +
+            'record; the owner can approve it in the VITALS panel, which opens a short window.]'
+        : removed
+          ? `\n\n[${removed} identifier${removed === 1 ? '' : 's'} replaced with stable local tags ` +
+            `(${kinds.join(', ')}). A tag is the same every time for the same value, so you can tell ` +
+            'whether something CHANGED without being told what it is — which is what most tasks ' +
+            'actually need.' +
+            (asked
+              ? ' You asked for the real values and no human has approved that, so nothing was ' +
+                'disclosed. The request is on the record; ask the owner to approve it in the panel.'
+              : ' If you genuinely need the real values, pass identifiers:true — that records a ' +
+                'request, and a human has to approve it before anything is released.') + ']'
+          : '';
+      return ok(id, { content: [{ type: 'text', text: text + note }] });
     } catch (e) {
       /* isError, not a protocol error: the model should see the reason and be able to act on it. */
       return ok(id, { isError: true, content: [{ type: 'text', text: `${name} failed: ${e.message}` }] });
@@ -406,4 +618,6 @@ process.stdin.on('data', (chunk) => {
   }
 });
 process.stdin.on('end', () => process.exit(0));
-process.stderr.write(`vitals-mcp: ${TOOLS.length} tools (${ALLOW_ACTIONS ? 'reads + actions' : 'read-only'}), bridge 127.0.0.1:${PORT}\n`);
+process.stderr.write(`vitals-mcp: ${TOOLS.length} tools (${ALLOW_ACTIONS ? 'reads + actions' : 'read-only'}), ` +
+  `bridge 127.0.0.1:${PORT}, ` +
+  `${DEV_FLAG ? 'DEVELOPER MODE — answers are NOT redacted' : 'identifiers redacted by default'}\n`);

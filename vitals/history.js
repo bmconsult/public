@@ -48,6 +48,7 @@
  * ---------------------------------------------------------------------------------------------
  */
 
+const { systemVolume } = require('./diagnose');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -57,9 +58,41 @@ const { Hist } = require('./hist');
  * option in that version. JSON.parse treats the leading U+FEFF as an unexpected token and throws,
  * so every file written by the PowerShell helpers must be de-BOM'd on the way in. */
 function readJsonFile(file) {
-  let txt = fs.readFileSync(file, 'utf8');
+  let txt = readTextFile(file);
   if (txt.charCodeAt(0) === 0xFEFF) txt = txt.slice(1);
   return JSON.parse(txt);
+}
+
+/* AND `*>` IS A DIFFERENT ENCODING AGAIN, which is why this is separate from the comment above.
+ *
+ * `Set-Content -Encoding utf8` writes UTF-8 with a BOM — handled above since the day it bit us.
+ * But PowerShell 5.1's REDIRECTION operators (`*>`, `>`, `2>`) do not honour that: they write
+ * **UTF-16LE with an FF FE BOM**. `/api/scanlog` read the elevated MFT scan's log with a plain
+ * utf8 readFileSync and served the result, so every consumer received replacement characters
+ * interleaved with NULs — mojibake that reads like file corruption rather than like an encoding
+ * mistake. Measured with od -c on the real history/scan.log: the leading bytes are 377 376, then
+ * each ASCII character followed by a NUL. Reproduces from a bare `powershell ... *> file`.
+ *
+ * (The first draft of this very comment pasted those raw bytes in as an illustration and shipped
+ * eight literal NULs into the source. A comment about invisible corruption is a bad place to keep
+ * some. The bytes are described in words now, and a tree-wide scan for control characters runs
+ * alongside the suites.)
+ *
+ * Sniffing the BOM rather than forcing the writer, deliberately: logs written by earlier versions
+ * are already on disk in UTF-16, and a fix that only corrects new files leaves the existing ones
+ * unreadable with no sign that anything changed. */
+function readTextFile(file) {
+  const buf = fs.readFileSync(file);
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return buf.toString('utf16le', 2);
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    /* UTF-16BE. Node cannot decode it directly, so the bytes are swapped into LE first. Rare
+       (nothing here writes it) but cheap, and a half-handled encoding is how the first one hid. */
+    const swapped = Buffer.from(buf.subarray(2));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) return buf.toString('utf8', 3);
+  return buf.toString('utf8');
 }
 
 const HI_RES = 3600;                 // 1 hour at 1 Hz
@@ -90,7 +123,7 @@ class History {
        full-disk-of-zero for any platform without a C:. Root volume first, then the biggest thing
        present, then honest nulls. */
     const vols = tick.disk.vols || [];
-    const c = vols.find((v) => v.id === 'C:' || v.id === '/') || vols[0] || { pct: null, freeGB: null };
+    const c = systemVolume(tick) || { pct: null, freeGB: null };
     const io = tick.disk.io;
     const s = {
       ts: tick.ts,
@@ -605,4 +638,4 @@ class History {
   }
 }
 
-module.exports = { History, readJsonFile };
+module.exports = { History, readJsonFile, readTextFile };

@@ -242,6 +242,60 @@ for (const [k, r] of Object.entries(REFS)) {
   check(`${k} states where its tolerance came from`, typeof r.measured === 'string' && r.measured.length > 10);
 }
 
+console.log('\n--- INDEPENDENCE IS A CLAIM ABOUT SYSCALLS, AND IT IS PINNED HERE ---');
+{
+  /* darwin's uptime leg was declared independent on the strength of the method string saying
+     "sysctl kern.boottime". The collector reaches it with os.uptime() (collect/darwin.js:612) and
+     so did the check - one function agreeing with itself, which duly reported a 107 s "agreement"
+     against a 240 s tolerance on live CI hardware and read as evidence.
+     Nothing in this suite noticed, and flipping it back to `true` still leaves every other check
+     green. So the declarations are pinned to literals: changing one has to be deliberate, and the
+     comment naming the source file has to be re-read before it can be changed. */
+  const ind = REFS.uptimeSec.independent;
+  check('darwin uptime is NOT an independent path — both sides are os.uptime()',
+    ind.darwin === false, JSON.stringify(ind));
+  check('linux uptime likewise — libuv reads the /proc/uptime the collector reads',
+    ind.linux === false, JSON.stringify(ind));
+  check('win32 uptime IS independent — Win32_OperatingSystem.LastBootUpTime vs GetTickCount64',
+    ind.win32 === true, JSON.stringify(ind));
+  check('and every declared leg is an explicit boolean, never an absent key read as false',
+    ['win32', 'linux', 'darwin'].every((k) => typeof ind[k] === 'boolean'), JSON.stringify(ind));
+
+  /* WHETHER THE CLAIM WAS CHECKED IS ITSELF A CLAIM, and it is tracked separately from whether the
+     comparison runs. The linux memory leg reads `independent: true` because the comparison is worth
+     running either way; whether the reference route is genuinely separate is NOT established (libuv
+     >= 1.45 may read the same /proc/meminfo the collector does), so it carries null and says so.
+     Overloading `independent` to express that doubt would have switched the comparison off, which
+     throws away the best check on the platform to make a point about a word. */
+  const ver = REFS.memAvailMB.independenceVerified;
+  check('memory independence is VERIFIED on win32 and darwin', ver.win32 === true && ver.darwin === true,
+    JSON.stringify(ver));
+  check('and explicitly NOT ESTABLISHED on linux — assumed, not checked', ver.linux === null,
+    JSON.stringify(ver));
+  check('while the comparison still RUNS there, because it is worth running either way',
+    REFS.memAvailMB.independent.linux === true);
+
+  /* AN ABSENT RECORD IS NOT A VERIFIED ONE. plan() defaulted a missing `independenceVerified` map
+     to `true` — so cpuPct and uptimeSec, which have no map, were published as "both routes read and
+     confirmed different" on the strength of nothing. That is the darwin bug again, one level up, in
+     the function that exists to express the distinction. Asserted per row so a new REF cannot
+     inherit a claim by omission. */
+  /* Asserted on all three platforms, because the default is what leaks and it leaks per-platform. */
+  for (const plat of ['win32', 'linux', 'darwin']) {
+    const plan = sc(plat).plan();
+    const byKey = Object.fromEntries(plan.map((r) => [r.key, r]));
+    check(`${plat}: a row with no independenceVerified record reports null, not true`,
+      byKey.cpuPct.independenceVerified === null && byKey.uptimeSec.independenceVerified === null,
+      JSON.stringify(plan.map((r) => [r.key, r.independenceVerified])));
+    check(`${plat}: the row that HAS a record still reports exactly what it says`,
+      byKey.memAvailMB.independenceVerified === REFS.memAvailMB.independenceVerified[plat],
+      `${byKey.memAvailMB.independenceVerified} vs ${REFS.memAvailMB.independenceVerified[plat]}`);
+    check(`${plat}: no row claims verified independence without a record saying so`,
+      plan.every((r) => r.independenceVerified !== true || !!REFS[r.key].independenceVerified),
+      JSON.stringify(plan.map((r) => [r.key, r.independenceVerified])));
+  }
+}
+
 console.log(`\n${fail ? fail + ' FAILED of ' : 'all '}${pass + fail} checks${fail ? '' : ' passed'} — the FOLD is right; independence itself is a claim CI exercises.`);
 process.exit(fail ? 1 : 0);
 }

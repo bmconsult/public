@@ -37,12 +37,40 @@
  * at 300 ms averages 35 ms, which sounds survivable and is not. The measure is the FRACTION of
  * frames that overran their budget - the same p95-over-mean argument the storage substrate is
  * built on, applied to the thing the user actually perceives.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * AND THAT EXAMPLE IS BELOW THIS GOVERNOR'S OWN THRESHOLD, which the header did not use to say.
+ *
+ * Four hitches in sixty-four frames is 6.3% jank. JANK_THROTTLE is 20%. So the case written above
+ * to motivate the design is a case this governor watches go past and does nothing about - it
+ * reports "foreground is keeping up (6% jank, p95 300 ms)", a sentence containing both its verdict
+ * and the evidence against it. The example was right about the METRIC and silent about the BAR,
+ * and read as though it justified both.
+ *
+ * Reconciled by saying what the bar is for. Jank ratio is the right measure, and 20% is not a
+ * perceptual claim - nobody has established that a fifth of frames is where a person notices. It is
+ * a claim about the COST OF BEING WRONG, and the two directions are not symmetric:
+ *
+ *   throttle when the machine was fine   background work stops, maintenance silently never runs,
+ *                                        and the user never learns why. Invisible and permanent.
+ *   don't throttle when it was janky     a background job keeps running through some stutter the
+ *                                        user was having anyway. Visible and over in seconds.
+ *
+ * So the bar is set high on purpose, and the honest consequence is stated rather than buried: a
+ * panel hitching four times a second WILL NOT defer background work here. What this governor
+ * protects against is a sustained stall - a fifth of frames or more, for seconds - which is the
+ * regime where continuing to run maintenance turns bad into unusable. Occasional hitching is left
+ * alone deliberately, because the remedy costs more than the symptom.
+ * ---------------------------------------------------------------------------------------------
  */
 
 const STALL_FRAME_MS = 34;        // ~2 frames at 60 Hz: a frame this long is a visible hitch
 const WINDOW_MS = 4000;           // how much recent evidence a verdict rests on
 const SIGNAL_STALE_MS = 6000;     // beyond this, the panel is not reporting and there is NO signal
-const JANK_THROTTLE = 0.20;       // a fifth of frames hitching: back off
+/* NOT a perceptual threshold - see the header. A deliberate bias toward letting work run, because
+   a wrongly-deferred background job is invisible and permanent while a wrongly-continued one is
+   visible and brief. */
+const JANK_THROTTLE = 0.20;
 const JANK_RELEASE = 0.08;        // and only resume well below it, so it cannot oscillate
 
 class Governor {
@@ -51,6 +79,9 @@ class Governor {
     this.frames = [];             // {at, ms}
     this.lastReportAt = 0;
     this.throttled = false;
+    /* Which absence stall() last hit, so allow() and status() can say which one rather than
+       printing the same sentence for two different situations. */
+    this.lastAbsence = null;
     this.since = 0;
     this.deferred = 0;
     this.log = [];
@@ -73,11 +104,28 @@ class Governor {
   }
 
   /** The measurement, or null when there is no signal at all. */
+  /* TWO DIFFERENT ABSENCES, AND THEY USED TO SHARE ONE RETURN VALUE - this file's own
+     render-loop-settle-law, committed inside the module that quotes it. `null` meant both "no panel
+     is reporting" and "a panel is reporting but has sent fewer than 20 frames", and allow() printed
+     the first sentence for both. So a panel rendering and hitching on EVERY frame was described as
+     "no panel is rendering, so there is no foreground to protect" - the most confident possible
+     wording for the case where the evidence points the other way. Verified: 19 all-janky frames
+     produced exactly that sentence; the 20th flipped it to a refusal.
+     `why` now distinguishes them. Both still decline to throttle, which is correct - too few frames
+     is genuinely too little evidence - but the reader is told which of the two they are looking at. */
   stall() {
     const t = this.now();
-    if (!this.lastReportAt || t - this.lastReportAt > SIGNAL_STALE_MS) return null;
+    if (!this.lastReportAt || t - this.lastReportAt > SIGNAL_STALE_MS) {
+      this.lastAbsence = 'no panel is rendering, so there is no foreground to protect';
+      return null;
+    }
     const win = this.frames.filter((f) => f.at >= t - WINDOW_MS);
-    if (win.length < 20) return null;          // too few frames to characterise anything
+    if (win.length < 20) {
+      this.lastAbsence = `a panel IS rendering but has only sent ${win.length} frames in the last ` +
+        `${WINDOW_MS / 1000}s — too few to characterise, so this is not evidence that it is smooth`;
+      return null;
+    }
+    this.lastAbsence = null;
     const janky = win.filter((f) => f.ms >= STALL_FRAME_MS).length;
     const sorted = win.map((f) => f.ms).sort((a, b) => a - b);
     return {
@@ -133,7 +181,9 @@ class Governor {
     const s = this.evaluate();
 
     if (!s) {
-      return { run: true, why: 'no panel is rendering, so there is no foreground to protect', stall: null };
+      return { run: true,
+               why: this.lastAbsence || 'no panel is rendering, so there is no foreground to protect',
+               stall: null };
     }
 
     if (this.throttled) {
@@ -161,6 +211,9 @@ class Governor {
       signal: s ? 'live' : 'none',
       /* Said in as many words, because "none" would otherwise be read as "no stall". */
       signalNote: s ? 'measured from the panel\'s own frame intervals'
+        : (this.lastAbsence && /only sent/.test(this.lastAbsence))
+          ? this.lastAbsence + '. This is an ABSENCE of evidence, not evidence of smoothness, so ' +
+            'nothing is deferred on the strength of it.'
         : 'no panel is rendering, so foreground stall cannot be measured. This is an ABSENCE of ' +
           'evidence, not evidence of smoothness — and background work proceeds, because a job ' +
           'deferred on no evidence is a job that never runs.',

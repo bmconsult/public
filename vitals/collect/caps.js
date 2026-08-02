@@ -39,6 +39,10 @@ const KEYS = [
   'power.battery', 'power.rate', 'power.health', 'power.wake',
   'scan.mft', 'scan.iotrace', 'scan.growth', 'scan.startup',
   'clip.history',
+  /* The screen read. It is the most sensitive thing this product does and it had NO capability
+     key at all — forty keys and none for it — so a manifest could not say 'unavailable here'. An
+     inventory that omits your widest capability is not an inventory. */
+  'screen.read',
   'act.restartApp', 'act.clean', 'act.kill', 'act.elevate',
   'host.frameless', 'host.tray',
   'self.verify',
@@ -64,6 +68,8 @@ const PLATFORMS = {
       'power.battery': true, 'power.rate': true, 'power.health': true, 'power.wake': false,
       'scan.mft': true, 'scan.iotrace': true, 'scan.growth': true, 'scan.startup': true,
       'clip.history': true,
+      /* BitBlt via peek.ps1, behind a passphrase-gated, self-expiring, caller-scoped window. */
+      'screen.read': true,
       'act.restartApp': true, 'act.clean': true, 'act.kill': true, 'act.elevate': true,
       'host.frameless': true, 'host.tray': true,
       /* All three comparisons run and are independent here; observed agreeing on this machine. */
@@ -79,13 +85,27 @@ const PLATFORMS = {
          exist, so this code has never returned a reading. Written from the documented counter
          shape and declared FALSE, because a flag in this file means observed. */
       'npu.util': false,
-      'alert.notify': true,
+      /* PARTIAL, NOT TRUE — corrected in review, and the correction is the point of this file. The
+         toast call was observed to run and return success, which is all `true` would have been
+         claiming; but `ToastNotifier.Show()` returns void and succeeds identically with Focus
+         Assist on or notifications disabled for the app in Settings. What was verified is that the
+         channel exists, not that anything appeared. See the note below and notify.js's probe(). */
+      'alert.notify': 'partial',
     },
     notes: {
       'cpu.temps': 'Windows exposes no CPU temperature to unprivileged code. Present only when ' +
                    'LibreHardwareMonitor is running and serving its web endpoint on :8085.',
       'mem.pressure': 'A kernel memory VERDICT (the macOS pressure level) has no Windows twin; ' +
                       'the hard-fault rate is this platform\'s honest equivalent and is measured.',
+      'alert.notify': 'A toast is raised through the shell AppId, and delivery is MEASURED rather ' +
+                      'than assumed: the per-AppId LastNotificationAddedTime registry value is read ' +
+                      'either side of Show(), and it advances only when the notification centre ' +
+                      'accepts the toast. Show() itself returns void and succeeds even with the ' +
+                      'the app\'s notifications turned off, so the exit code alone proved nothing — ' +
+                      'that is exactly how a real misconfiguration went unnoticed here. Still ' +
+                      '"partial", because acceptance is not the same as a human seeing it: ' +
+                      'Focus Assist can file a toast without ever drawing it, and nothing on this ' +
+                      'platform reports that distinction.',
       'power.wake': 'Naming the process that blocks sleep needs an elevated `powercfg /requests`, ' +
                     'which the unelevated bridge deliberately does not run.',
     },
@@ -112,7 +132,13 @@ const PLATFORMS = {
        also CAPTURED the /proc bytes (net/tcp, pressure, systemctl, ss) that the sockets, startup
        and PSI code below was then written against.
        STILL UNPROVEN ANYWHERE: battery, populated GPU and thermal paths - every CI host is a VM
-       with none of the three, so those entries stay partial until a real Linux laptop reports. */
+       with none of the three, so those entries stay partial until a real Linux laptop reports.
+       AND THE RUN IS NOW RE-RUNNABLE. Until 2026-08-02 this paragraph cited a CI run that existed
+       nowhere in the repository - no .github/, no workflow - so the evidence for the strongest
+       claim in this file rested on somebody's memory of a green tick. That is the same defect as a
+       capability manifest written from intent: the claim is here, the evidence was not. The
+       workflow is committed at .github/workflows/verify.yml and ships with the tree, so anyone
+       holding this code can reproduce the run rather than take this sentence on trust. */
     verified: 'end-to-end on real kernels in CI (ubuntu-22.04 + 24.04, 2026-07-31): parser ' +
               'fixtures against captured /proc text, live cross-check against df/free/nproc, ' +
               'stimulus checks that the counters move, growth walker over a real home, bridge ' +
@@ -161,6 +187,7 @@ const PLATFORMS = {
          agrees. */
       'scan.startup': true,
       'clip.history': false,
+      'screen.read': false,
       /* act.kill / act.clean: the counting and escalation logic passed on both runners in the
          seam-driven suite; what was MISSING was real signals and the real target directory, and
          the CI now does both (a stubborn child that ignores SIGTERM; a genuine sweep of the
@@ -234,6 +261,7 @@ const PLATFORMS = {
       'act.clean': 'User-owned targets (tmp, ~/.cache) with denials counted; CI now sweeps the ' +
                    'real usercaches target. No elevated targets: that needs polkit, see ' +
                    'act.elevate.',
+      'screen.read': false,
       'clip.history': 'Requires a running X11 or Wayland session with xclip or wl-clipboard - a ' +
                       'thing no headless CI host has, so a watcher written today could not be ' +
                       'verified today. Unwritten until it can be proven on a real desktop.',
@@ -310,13 +338,18 @@ const PLATFORMS = {
       'clip.history': 'partial',
       'act.restartApp': false, 'act.clean': false, 'act.kill': false, 'act.elevate': false,
       'host.frameless': 'partial', 'host.tray': false,
-      /* OBSERVED, 2026-08-01, on real Apple Silicon (macos-14 + macos-15):
-         https://github.com/bmconsult/public/actions/runs/30682901723
-         All three comparisons ran and all three agreed - memory 0 violations in 16, cpu median 8.0
-         against a 15 tolerance, uptime median 107 s against 240. Flipped only now, because this
-         file's rule is that a flag means observed rather than implemented, and until that run there
-         was code but no evidence. */
-      'self.verify': true,
+      /* PARTIAL. Observed on real Apple Silicon (macos-14 + macos-15) 2026-08-01,
+         https://github.com/bmconsult/public/actions/runs/30682901723 - memory 0 violations in 16,
+         cpu median 8.0 against a 15 tolerance, uptime median 107 s against 240.
+         It was flipped to `true` on that evidence, and review caught that the evidence does not
+         reach that far: the uptime leg is not an independent path on this platform. The collector
+         reads `os.uptime()` (collect/darwin.js:612) and so did the check, so that third comparison
+         was one function agreeing with itself and its 107 s "agreement" was arithmetic rather than
+         a measurement. Two of the three legs are real - more than linux, which carries one, and
+         less than win32, which carries three. 'partial' is the honest word for both. (The first
+         version of this comment said "exactly what linux carries", which was wrong by one leg: a
+         sentence written to correct a false claim should not contain a new one.) */
+      'self.verify': 'partial',
       'disk.smart': false,
       'sys.irq': false,
       'npu.util': false,

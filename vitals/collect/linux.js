@@ -302,7 +302,9 @@ function power() {
     charging: status === 'Charging',
     discharging: status === 'Discharging',
     rateW, remWh, fullWh, designWh,
-    cycles: readInt(path.join(bat, 'cycle_count')) || 0,
+    /* NOT `|| 0`. Plenty of batteries do not expose cycle_count, and "0 cycles" is the reading of
+       a brand-new pack — the single most misleading value available for a worn one. */
+    cycles: readInt(path.join(bat, 'cycle_count')) ?? null,
     chem: read(path.join(bat, 'technology')).trim(),
     /* Time-to-empty is derived, not reported, and only when there is a real draw to divide by. */
     lifeMin: (remWh != null && rateW != null && rateW < 0)

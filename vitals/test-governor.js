@@ -88,6 +88,25 @@ console.log('\n--- jank ratio, not average frame time ---');
   check('but the jank ratio sees it', s.jank >= 0.06, s.jank);
   check('and p95 sees it', s.p95 > 200, s.p95);
   check('while p50 stays honest about the typical frame', s.p50 < 20, s.p50);
+
+  /* AND THE DECISION, which is the thing this module actually produces. The checks above assert
+     that the METRIC noticed; none of them asserted what the governor DID, and what it does here is
+     nothing — 4 hitches in 60 frames is 6.7%, a third of JANK_THROTTLE. Asserting the number and
+     stopping is how a module comes to have a motivating example it does not act on. Pinned in both
+     directions so the bar cannot drift without this failing. */
+  const d = g.allow('maintenance');
+  check('the motivating example does NOT trip the governor, and the suite says so',
+    d.run === true && s.jank < JANK_THROTTLE,
+    `${(s.jank * 100).toFixed(1)}% jank against a ${(JANK_THROTTLE * 100).toFixed(0)}% bar`);
+  check('and the reason it gives repeats the evidence against itself rather than hiding it',
+    /p95 300/.test(d.why), d.why);
+
+  /* What the bar IS for: a sustained stall, not occasional hitching. */
+  const { g: g2 } = rig();
+  g2.report(Array.from({ length: 60 }, (_, i) => (i % 3 === 0 ? 300 : 16.7)));
+  const d2 = g2.allow('maintenance');
+  check('a third of frames hitching DOES defer the work', d2.run === false,
+    `${(g2.stall().jank * 100).toFixed(0)}% jank — ${d2.why}`);
 }
 
 console.log('\n--- hysteresis: it cannot oscillate ---');

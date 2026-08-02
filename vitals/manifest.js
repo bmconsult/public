@@ -46,6 +46,37 @@ const FILES = [
   'notify.js', 'test-notify.js', 'hardware.ps1',
   // B16 + B18: the correlation subsystem, and the ledger read back to judge its own rules.
   'correlate.js', 'test-correlate.js',
+  // ===========================================================================================
+  // 2026-08-01. Everything below was written, reviewed four times, and was NOT IN THE PRODUCT.
+  // pack.js caught it — nine FAILs, "this build is NOT shippable" — the moment anyone ran it,
+  // which nobody had. Three review rounds asked "is this ready to ship" and none of them
+  // executed the packager, which is the only thing that answers that question.
+  //
+  // THE TRAP IS THE DESIGN, AND THE DESIGN IS RIGHT: this list is an ALLOWLIST, so a new file is
+  // excluded by default. That property is exactly what keeps the owner's screenshots, scratch
+  // files and history out of a public repo — and it is exactly what silently dropped seven
+  // runtime modules. Safe default, fatal omission, same mechanism. The rule that follows:
+  // ADD TO THIS LIST IN THE SAME COMMIT THAT CREATES THE MODULE, and run `node pack.js` before
+  // ever claiming something ships. A feature absent from here does not exist.
+  //
+  // The AI privacy layer: redaction by default, the access log, and the three permission tiers.
+  'redact.js', 'test-redact.js', 'aiaccess.js', 'test-aiaccess.js',
+  // Developer mode: the wiring/error surface, and the hash-bound per-diff edit approval.
+  'devtools.js', 'devedit.js', 'test-devedit.js',
+  // The automations engine — earned from the outcomes ledger, standard maintenance offered
+  // outright, and the disruptive tier that only ever asks. Its suite ships for the same reason
+  // the collectors' do: it is how a machine nobody has seen proves the refusals still refuse.
+  'automate.js', 'test-automate.js', 'test-outcomes.js',
+  // The screen read. Ships as of 0.9.9 with the three blockers closed: the grant is held IN
+  // MEMORY (nothing on disk to forge, and a restart closes the window), the duration cap is
+  // clamped on every READ rather than once at the door, and the grant is SCOPED TO A CALLER by a
+  // token issued at /open — one human's permission is no longer everyone's permission.
+  'peek.js', 'peek.ps1', 'test-peekgate.js', 'test-peeklive.js',
+  // It was held out of this list on review's DO NOT SHIP, and the reason is kept because it is the
+  // reason the current design looks the way it does: the grant used to be a FILE, so anything with
+  // disk access could write itself one and never meet the passphrase — writing the file WAS turning
+  // it on. Shipping that "off by default" would have been shipping a remote-controllable screen
+  // reader, since off-by-default guards against accident and none of those paths was an accident.
   // The panel's own syntax check. `node --check` does not cover HTML, and a broken inline script
   // in dashboard.html produces a BLANK PAGE with an empty console — indistinguishable from a slow
   // fetch. This is the only thing that catches it.
@@ -75,6 +106,10 @@ const FILES = [
   // the macOS finishing kit: the process doc, the one-command runner, and the capture script it
   // and CI both use. They ship with the install because the person with the Mac is a user, not
   // necessarily a contributor with the repo.
+  /* The CI workflow. It ships and it is in the repo because caps.js CITES a CI run as evidence,
+     and an evidence claim whose evidence is not in the tree is the same defect as a capability
+     manifest written from intent. Now anyone with the repository can re-run it. */
+  '.github/workflows/verify.yml',
   'FINISH_ON_A_MAC.md',
   'tools/finish-on-a-mac.sh',
   'tools/capture-macos-fixtures.sh',

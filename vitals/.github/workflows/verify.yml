@@ -1,0 +1,117 @@
+# VITALS - a system monitor that measures the machine it runs on and explains what it finds.
+# Copyright 2026 Ben M
+# SPDX-License-Identifier: Apache-2.0
+#
+# THE EVIDENCE THIS REPOSITORY CITES, MADE REPRODUCIBLE FROM THIS REPOSITORY.
+#
+# caps.js says the linux collector was proved "end-to-end on real kernels in CI (ubuntu-22.04 +
+# ubuntu-24.04, 2026-07-31)". That run happened. It was also not reproducible from the tree -- there
+# was no .github/ anywhere -- so the claim rested on somebody's memory of a green tick. That is the
+# same defect as a capability manifest written from intent: an evidence claim whose evidence is not
+# where the claim is. Review named it twice; this file is the answer.
+#
+# AND IT DOES SOMETHING THE OWNER CANNOT DO ON HIS OWN HARDWARE. He has no Mac, so darwin has always
+# been fixtures plus honesty -- caps.verified is false with a note saying exactly what is unproven.
+# GitHub's macos runners are REAL MACS. Running collect/test-darwin.js and test-darwin-live.js there
+# is not a substitute for a physical machine (a CI host is a VM: no battery, no populated GPU, no
+# real thermal path -- the same three gaps the linux note already states), but it is the difference
+# between "never executed on the platform" and "executed, with the untestable parts named".
+#
+# WHAT A GREEN RUN HERE DOES AND DOES NOT LICENCE:
+#   DOES     -- flipping the parser/collector claims for a platform to verified, dated to the run.
+#   DOES NOT -- flipping battery, GPU or thermal capabilities. No CI host has them. If a future
+#               edit makes a green tick here look like proof of those, the note in caps.js is the
+#               thing that is wrong, not this workflow.
+
+name: verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The whole suite is pure Node and platform-independent by design, so it runs everywhere. This is
+  # the job that would have caught the manifest gap: pack.js refuses a build whose require() graph
+  # does not land on shipped files, and for four review rounds nobody ran it.
+  suites:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      # Every test-*.js in the root. Listed by glob rather than by name on purpose: a hand-written
+      # list beside a growing suite set is how one of them quietly stops being run, which is the
+      # same failure the manifest allowlist had.
+      - name: suites
+        shell: bash
+        run: |
+          fail=0
+          for f in test-*.js; do
+            echo "--- $f"
+            node "$f" || fail=1
+          done
+          exit $fail
+
+      # THE ONE THAT ANSWERS "does it ship". It verifies every local require() lands on a file in
+      # manifest.js FILES, and refuses the build otherwise.
+      - name: the build must build
+        run: node pack.js
+
+  # REAL KERNELS. This is the run caps.js cites; from now on it is re-runnable by anyone with the
+  # repository, which is the entire point.
+  linux-live:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: parsers against real /proc
+        run: node collect/test-linux.js
+      - name: live collector on this kernel
+        run: node collect/test-linux-live.js
+      # Under load, so the numbers are not all zeroes agreeing with each other. A collector that is
+      # right about an idle VM has not been tested; the interesting failures are the busy ones.
+      - name: live collector under stimulus
+        run: node collect/test-linux-stimulus.js
+
+  # REAL macOS. Never executed on the platform before this file existed.
+  darwin-live:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: parsers against captured fixtures
+        run: node collect/test-darwin.js
+      # ALLOWED TO FAIL, DELIBERATELY, AND THIS IS THE HONEST PART. These are the first runs on a
+      # real Mac and they are expected to disagree with fixtures captured from a different macOS
+      # version -- that disagreement IS the finding, and it is what corrects the fixtures. Failing
+      # the whole workflow on it would mean nobody ever pushes the first run, so the platform stays
+      # unproven forever to keep a tick green. The output is the deliverable here, not the status.
+      - name: live collector on real macOS (informational until a run is reviewed)
+        continue-on-error: true
+        run: node collect/test-darwin-live.js
+      - name: simulated paths
+        continue-on-error: true
+        run: node collect/test-darwin-sim.js
+      # Fixtures from a genuine host, so the next parser change is written against real bytes rather
+      # than against what somebody assumed macOS emits.
+      - name: capture fixtures from this host
+        continue-on-error: true
+        run: bash tools/capture-macos-fixtures.sh || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-fixtures
+          path: collect/fixtures/**
+          if-no-files-found: ignore

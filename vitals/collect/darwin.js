@@ -283,7 +283,8 @@ function start(root, { onStatic, onTick, onError }) {
           remWh: toWh(num('AppleRawCurrentCapacity')),
           fullWh: toWh(num('AppleRawMaxCapacity')),
           designWh: toWh(num('DesignCapacity')),
-          cycles: num('CycleCount') || 0,
+          /* NOT `|| 0` — see the linux collector. "0 cycles" reads as a new battery. */
+          cycles: num('CycleCount') ?? null,
           chem: 'Li-ion',
           lifeMin: remMin.length ? (+remMin[1] * 60 + +remMin[2]) : null,
         };

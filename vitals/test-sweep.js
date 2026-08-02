@@ -105,6 +105,68 @@ console.log('\n--- THE ONE THAT MATTERS: pure noise must NOT produce a winner --
   check('the verdict calls it a matter of taste rather than of cost', /taste rather than of cost/.test(r.verdict));
 }
 
+console.log('\n--- A QUANTIZED INSTRUMENT IS NOT A NOISELESS ONE ---');
+{
+  /* The production case, reproduced. The real measurement is a median frame interval, and frames
+     arrive on vsync, so samples land on 16.7 ms steps. When more than half of them share a step the
+     MAD is exactly ZERO - which happened in 300 of 300 trial sweeps, meaning the zero-noise branch
+     was not the corner case it was written as, it was the only branch that ever ran. And that
+     branch had no bar: `effect > 0` made any difference at all a winner.
+
+     Both arms below are the SAME distribution, sampled onto the same grid. There is nothing to
+     find. A one-step gap between their medians is the grid, not the setting. */
+  const step = 1000 / 60;
+  const quant = (x) => Math.round(x / step) * step;
+  const s = rig(async () => quant(noisy(24, 9)));
+  const r = await s.run('vsync', ['on', 'off'], 9);
+  check('the within-arm spread really is zero, as it is in production',
+    r.arms.every((a) => a.spread === 0), JSON.stringify(r.arms.map((a) => a.spread)));
+  check('a quantized instrument does NOT get a free winner', r.distinguishable === false,
+    `effect ${r.effect} — ${r.verdict}`);
+  check('there is no bar, and none is invented', r.bar === null);
+  check('the receipt names the test that actually ran', /separation/.test(r.testedBy || ''), r.testedBy);
+  check('and the verdict blames the instrument rather than clearing the setting',
+    /limit of the\s+instrument/.test(r.verdict), r.verdict);
+
+  /* The other end of it. A magnitude test has nothing to stand on here, but SEPARATION does: if
+     every sample of one arm lands clear of every sample of the other, that is strong evidence no
+     matter how coarse the steps are. Refusing to say so would be its own dishonesty. */
+  const big = rig(async (v) => quant(noisy(v === 'on' ? 16.7 : 66, 6)));
+  const rb = await big.run('vsync', ['on', 'off'], 9);
+  check('but arms that separate COMPLETELY are still reported', rb.distinguishable === true,
+    `${rb.verdict}`);
+  check('and the claim rests on an exact p-value, not on an estimated floor',
+    rb.separation && rb.separation.complete === true && rb.separation.p < 0.01, JSON.stringify(rb.separation));
+
+  /* SEPARATION ALONE IS NOT ENOUGH — and the check that used to sit here proved nothing.
+     It read `distinguishable === (separation.p <= 0.01)`, which asserts the module agrees with its
+     own implementation: deleting the p gate entirely left the suite green. Worse, its name
+     described a case it could not construct — `run()` refuses fewer than MIN_ROUNDS rounds, and at
+     5 rounds with 2 arms p is already 0.0079, comfortably under the bar.
+     The case IS reachable through the ARM COUNT, because p carries a C(k,2) multiple-comparison
+     factor. Five arms at 5 rounds: 10 pairs x 2/C(10,5) = 0.079, eight times the bar. These two
+     runs differ ONLY in how many chances there were to find an extreme, and the verdict flips. */
+  const sep = async (arms, rounds) => {
+    const base = {}; arms.forEach((a, i) => { base[a] = 16.7 + i * 66; });
+    return rig(async (v) => quant(noisy(base[v], 6))).run('vsync', arms, rounds);
+  };
+  const wide = await sep(['a', 'b', 'c', 'd', 'e'], MIN_ROUNDS);
+  check('perfectly separated arms are still REFUSED when there were too many chances to separate',
+    wide.separation.complete === true && wide.distinguishable === false && wide.separation.p > 0.01,
+    `${wide.separation.pairs} pairs, p=${wide.separation.p}, complete=${wide.separation.complete}`);
+
+  const enough = await sep(['a', 'b', 'c', 'd', 'e'], 9);
+  check('the SAME five arms with more rounds clear the same bar',
+    enough.separation.complete === true && enough.distinguishable === true && enough.separation.p <= 0.01,
+    `p=${enough.separation.p}`);
+
+  /* And the degenerate case: nothing varies at all, anywhere. */
+  const flat = rig(async () => 42);
+  const rf = await flat.run('flat', ['a', 'b'], 6);
+  check('all-identical samples yield no winner', rf.distinguishable === false && rf.effect === 0);
+  check('and no separation is claimed from them', rf.separation.complete === false);
+}
+
 console.log('\n--- DRIFT must not be attributed to a setting ---');
 {
   /* A machine that gets steadily slower over the run: cost climbs with every measurement taken,

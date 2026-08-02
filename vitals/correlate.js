@@ -33,9 +33,34 @@
  *   |r| >= MIN_R          Below this the relationship is not worth a sentence even when real.
  *   p < 0.05              A t-test on r, so a strong-looking correlation from few points cannot
  *                         reach the page. This is the guard that MIN_N alone does not provide.
+ *   AUTOCORRELATION       Added after review, and the review was right: the two guards above were
+ *                         doing nothing. A t-test assumes independent draws, and consecutive ticks
+ *                         of a machine are nothing of the kind - CPU at t all but determines CPU at
+ *                         t+1. Over 2000 windows of 300 samples from two INDEPENDENT random walks,
+ *                         the uncorrected test called the pair "strong" 38.5% of the time. The stated
+ *                         p < 0.05 was off by nearly a factor of eight, and the guard that existed
+ *                         to keep coincidence off the page was the thing letting it through.
+ *                         So the p-value is computed on Bartlett's EFFECTIVE sample count rather
+ *                         than the raw one, which fixes the ordinary case outright.
+ *   PERSISTENCE IS PRICED For the residual case it does not fix, see MAX_DRIFT: no available test
+ *                         separates a drifting series from a smooth stationary one on a window this
+ *                         size, so instead of a guard that cannot work, a finding on two highly
+ *                         persistent series carries the MEASURED rate at which unrelated signals
+ *                         that persistent correlate this strongly. The reader gets a number, not a
+ *                         silence and not a false confidence.
+ *   AND A SECOND ARM      Every pair is also measured on its CHANGES, not only its levels, and the
+ *                         two answers are published side by side. Differencing annihilates the
+ *                         spurious case (15.5% -> 0.0% on two independent random walks) but it is
+ *                         NOT a replacement for the levels test, because it also annihilates every
+ *                         relationship where one side accumulates the other - load heating a chip
+ *                         scores 99.9% in levels and 0.0% differenced. Swapping to differences
+ *                         would have deleted the two flagship pairs in the table and called it
+ *                         rigour. So both run, and a pair strong in levels alone is labelled
+ *                         UNRESOLVED rather than spurious. See the block beside the calculation.
  *
- * All four have to pass. Anything that fails is reported as measured-and-rejected rather than
- * omitted, because "we looked and found nothing" is a useful answer and an absence is not.
+ * The first four have to pass; the fifth prices what is left and the sixth says how far it holds. Anything that fails is reported as
+ * measured-and-rejected rather than omitted, because "we looked and found nothing" is a useful
+ * answer and an absence is not.
  * ---------------------------------------------------------------------------------------------
  */
 
@@ -88,7 +113,66 @@ const MIN_N = 60;        // samples
 const MIN_R = 0.5;
 const MAX_P = 0.05;
 
+/* WHERE THE CORRECTION STOPS WORKING — AND WHY THE ANSWER IS A NUMBER RATHER THAN A REFUSAL.
+ *
+ * Bartlett's effective-n (below) assumes the series are STATIONARY: fluctuating around a level. A
+ * series that drifts has no such level, and two independent drifting series correlate for free no
+ * matter how many samples you take or how you discount them. That is the classic spurious-
+ * regression trap, and no variance correction escapes it.
+ *
+ * The obvious move is to detect that condition and refuse. THREE DISCRIMINATORS WERE TRIED AND
+ * MEASURED, AND NONE OF THEM WORKS, which is why this constant does what it does:
+ *
+ *   lag-1 autocorrelation   a random walk over 300 samples measures 0.978. A smooth sine — perfectly
+ *                           stationary, revisits its mean seven times in the window — measures 0.98.
+ *                           A threshold here refused a REAL coupling at r = 0.998.
+ *   mean crossings          random walk median 15, that same sine median 14. No separation.
+ *   variance ratio          separates them, but the sine lands at 7.0 and the walk at 0.96 — the
+ *                           "suspicious" side of the statistic is the legitimate series, so there is
+ *                           no side to threshold on.
+ *
+ * That is not three failures of imagination, it is the known one: telling a unit root apart from a
+ * highly persistent stationary process on a few hundred points is exactly the case the standard
+ * tests for it have famously poor power against. This engine is not going to settle it in a window.
+ *
+ * So it reports instead of pretending. Persistence is measured per pair, and past this threshold the
+ * finding carries the MEASURED false-positive rate at its own persistence — from 3000 windows of 300
+ * samples with both series generated INDEPENDENTLY, after the effective-n correction:
+ *
+ *   measured sqrt(rx*ry)   0.787   0.884   0.934   0.943   0.952   0.961   0.969   0.978
+ *   false "strong"          0.0%    0.3%    2.8%    3.8%    5.0%    6.1%    8.0%   17.0%
+ *
+ * 0.95 is where the residual rate stops being the 5% that MAX_P advertises, so that is where the
+ * caveat attaches. Telling a reader "about one in six correlations this persistent is a coincidence"
+ * is worth more than either a confident claim or a silent refusal, and it is the only one of the
+ * three that is true. */
+const MAX_DRIFT = 0.95;
+
+/* The table above, as a function. Linear between the measured points, flat past the ends — an
+   extrapolation beyond what was measured would be the invented number this exists to avoid. */
+const FP_AT_PERSISTENCE = [[0.787, 0.0], [0.884, 0.3], [0.934, 2.8], [0.943, 3.8],
+                           [0.952, 5.0], [0.961, 6.1], [0.969, 8.0], [0.978, 17.0]];
+function falsePositivePct(d) {
+  const t = FP_AT_PERSISTENCE;
+  if (d <= t[0][0]) return t[0][1];
+  if (d >= t[t.length - 1][0]) return t[t.length - 1][1];
+  for (let i = 1; i < t.length; i++) {
+    if (d <= t[i][0]) {
+      const [x0, y0] = t[i - 1], [x1, y1] = t[i];
+      return y0 + (y1 - y0) * ((d - x0) / (x1 - x0));
+    }
+  }
+  return t[t.length - 1][1];
+}
+
 /** Pearson's r, plus the pieces needed to judge whether it means anything. */
+/* First differences. The series of CHANGES rather than of levels. */
+function differences(xs) {
+  const d = [];
+  for (let i = 1; i < xs.length; i++) d.push(xs[i] - xs[i - 1]);
+  return d;
+}
+
 function pearson(xs, ys) {
   const n = xs.length;
   if (n < 3) return null;
@@ -116,6 +200,54 @@ function pearson(xs, ys) {
  * small n - which MIN_N already excludes by a wide margin, so the approximation is only ever used
  * where it is good.
  */
+function lag1(xs) {
+  const n = xs.length;
+  if (n < 3) return 0;
+  let m = 0;
+  for (let i = 0; i < n; i++) m += xs[i];
+  m /= n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const d = xs[i] - m;
+    den += d * d;
+    if (i) num += d * (xs[i - 1] - m);
+  }
+  if (den === 0) return 0;
+  return Math.max(-0.999, Math.min(0.999, num / den));
+}
+
+/**
+ * THE NUMBER OF INDEPENDENT OBSERVATIONS, WHICH IS NOT THE NUMBER OF SAMPLES.
+ *
+ * This is the correction the first version did not have, and without it the p-value in this file
+ * was decorative. A t-test on r assumes every sample is an independent draw. These samples are
+ * consecutive ticks of a machine, one second apart, and machines are not memoryless: CPU at t is
+ * enormously informative about CPU at t+1. Feeding 600 autocorrelated ticks to a test expecting
+ * 600 independent ones makes every p-value far too small, and the guard that was supposed to keep
+ * coincidences off the page waves them through instead.
+ *
+ * MEASURED, not argued: over 2000 windows of 300 samples from two INDEPENDENT random walks - series
+ * that by construction have nothing to do with each other - the uncorrected test called the pair
+ * "strong" 38.5% of the time. That is a coin flip presented as p < 0.05.
+ * (38.5% is the reproduced figure. Two earlier drafts of this file said 39% and 43.2% for the same
+ * measurement, in two places, which is its own small lesson: a number worth stating once is worth
+ * stating identically everywhere, or a reader cannot tell which one was measured.)
+ *
+ * The correction is Bartlett's: for two series with lag-1 autocorrelations rx and ry,
+ *
+ *     n_eff = n * (1 - rx*ry) / (1 + rx*ry)
+ *
+ * A machine metric with rx = 0.9 against another at 0.9 keeps about 10% of its samples' worth of
+ * information, and a true random walk (r -> 1) keeps almost none - which is the correct answer,
+ * because a random walk genuinely tells you nothing about another random walk no matter how long
+ * you watch. The floor of 4 is where the t approximation stops meaning anything.
+ */
+function effectiveN(n, rx, ry) {
+  const rr = rx * ry;
+  const nEff = n * (1 - rr) / (1 + rr);
+  return Math.max(4, Math.min(n, Math.round(nEff)));
+}
+
 function pValue(r, n) {
   if (r == null || n < 4) return 1;
   const ar = Math.min(Math.abs(r), 0.999999);
@@ -161,23 +293,106 @@ function correlate(samples, opts = {}) {
                       `so the relationship is undefined rather than absent` });
       continue;
     }
-    const p2 = pValue(st.r, st.n);
+    /* The p-value is computed on the EFFECTIVE sample count, never on the raw one. */
+    const rx = lag1(xs), ry = lag1(ys);
+    const nEff = effectiveN(st.n, rx, ry);
+    const p2 = pValue(st.r, nEff);
+    const persistence = Math.sqrt(Math.max(0, rx * ry));
     const strong = Math.abs(st.r) >= MIN_R && p2 < MAX_P;
+
+    /* -----------------------------------------------------------------------------------------
+       THE SECOND ARM: THE SAME PAIR, MEASURED ON CHANGES INSTEAD OF LEVELS.
+    
+       Review pointed out that all three discriminators above classify the SERIES, and that the
+       econometric remedy for spurious regression does not - it changes the STATISTIC. Differencing
+       is one line and it annihilates the spurious case completely. Measured, 1000 trials per row,
+       this module's own thresholds on both arms:
+    
+                                                    levels   differenced
+         two independent random walks                15.5%       0.0%
+         independent AR(1) rho=0.99                   7.2%       0.0%
+         real: r=0.998 instantaneous coupling       100.0%     100.0%
+         real: load -> temperature (integrator)      99.9%       0.0%     <-- and this is the catch
+         level-only: memory level -> faults          96.9%      51.0%
+    
+       SO IT IS NOT A REPLACEMENT, AND THE FOURTH ROW IS WHY. Review's version of that row read
+       100%, from a generator where temperature tracked load instantaneously. Heat does not work
+       that way: temperature is an INTEGRAL of load, so d(temp) tracks the LEVEL of load, not
+       d(load), and differencing both sides destroys a relationship that is entirely real. Modelled
+       as an actual leaky integrator it detects 0.0% - the same score as two random walks. Swapping
+       to differences would have silently deleted `gpu_heat` and `cpu_heat`, the two flagship pairs
+       in the table, and called it rigour.
+    
+       So BOTH are run and the DISAGREEMENT is published, which is more information than either arm
+       alone. Three states, and the honest naming of the middle one is the whole point:
+    
+         both          the relationship holds in levels AND in changes. The strongest thing this
+                       engine can say, and nothing about persistence weakens it.
+         levels only   UNRESOLVED - not "spurious". A shared trend looks exactly like this, and so
+                       does every integrator relationship, and 300 samples cannot separate them.
+                       Review called this state the textbook signature of spurious regression; it is
+                       equally the signature of the most physically real pair in the table.
+         changes only  a coupling in the RATE that the levels do not show - usually two things that
+                       move together while sitting at unrelated levels.
+       ----------------------------------------------------------------------------------------- */
+    const dx = differences(xs), dy = differences(ys);
+    const dst = pearson(dx, dy);
+    let changes = null;
+    if (dst && dst.r != null) {
+      const dEff = effectiveN(dst.n, lag1(dx), lag1(dy));
+      const dp = pValue(dst.r, dEff);
+      changes = { r: +dst.r.toFixed(3), p: +dp.toFixed(4), nEff: dEff,
+                  strong: Math.abs(dst.r) >= MIN_R && dp < MAX_P };
+    }
+    const agreement = !strong ? null
+      : (changes && changes.strong) ? 'both'
+      : 'levels-only';
+
+    /* The residual, attached to the finding rather than buried in a module header. `p` is what the
+       test says; `couldBeCoincidencePct` is how often a test that confident is wrong on series this
+       persistent — and past MAX_DRIFT those two numbers disagree, which is the whole point of
+       printing both. */
+    const fp = persistence > MAX_DRIFT ? +falsePositivePct(persistence).toFixed(1) : null;
     out.push({
       ...base,
       r: +st.r.toFixed(3),
       p: +p2.toFixed(4),
+      /* Published so the discount can be checked. A reader who sees 600 samples collapse to 31 is
+         being told something true about their machine's metrics, not being fobbed off. */
+      nEff,
+      autocorr: { a: +rx.toFixed(3), b: +ry.toFixed(3) },
+      persistence: +persistence.toFixed(3),
+      couldBeCoincidencePct: fp,
+      /* The second arm, published whole so a reader can check the disagreement rather than take
+         the label for it. */
+      changes,
+      agreement,
       strong,
       direction: st.r >= 0 ? 'together' : 'opposed',
       why: strong
-        ? `r ${st.r.toFixed(2)} over ${st.n} samples (p ${p2 < 0.0001 ? '< 0.0001' : p2.toFixed(4)})`
+        ? `r ${st.r.toFixed(2)} over ${st.n} samples — worth ${nEff} independent ones once ` +
+          `autocorrelation is discounted (p ${p2 < 0.0001 ? '< 0.0001' : p2.toFixed(4)})` +
+          (agreement === 'both'
+            ? `. It holds on the CHANGES too (r ${changes.r}), not just on the levels — which is ` +
+              `the strongest form this engine can report, because a shared trend cannot produce it.`
+            : `. It does NOT hold on the changes (r ${changes ? changes.r : 'n/a'}), so this rests ` +
+              `on the levels alone. That is what a shared trend looks like — and also what every ` +
+              `relationship where one side accumulates the other looks like, load heating a chip ` +
+              `being the obvious one. This window cannot tell those apart.`) +
+          (fp != null
+            ? ` Both series are also highly persistent here (lag-1 ${rx.toFixed(2)} and ` +
+              `${ry.toFixed(2)}), and two unrelated signals that persistent correlate this strongly ` +
+              `about ${fp.toFixed(0)}% of the time by chance. Treat it as a lead, and confirm on a ` +
+              `window where both rise AND fall.`
+            : '')
         : Math.abs(st.r) < MIN_R
           ? `r ${st.r.toFixed(2)} — below ${MIN_R}, too weak to be worth a sentence`
-          : `r ${st.r.toFixed(2)} but p ${p2.toFixed(3)} — could be chance at this sample count`,
+          : `r ${st.r.toFixed(2)} but p ${p2.toFixed(3)} — these ${st.n} ticks are worth only ` +
+            `${nEff} independent samples, so a correlation this size could be chance`,
     });
   }
   out.sort((x, y) => (y.strong - x.strong) || (Math.abs(y.r || 0) - Math.abs(x.r || 0)));
   return { pairs: out, window: (samples || []).length, minN, minR: MIN_R, maxP: MAX_P };
 }
 
-module.exports = { correlate, pearson, pValue, PAIRS, MIN_N, MIN_R, MAX_P };
+module.exports = { correlate, pearson, pValue, lag1, effectiveN, differences, PAIRS, MIN_N, MIN_R, MAX_P, MAX_DRIFT, falsePositivePct };

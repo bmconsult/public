@@ -20,8 +20,8 @@ const https = require('https');            // speed test only — nothing else l
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { History, readJsonFile } = require('./history');
-const { diagnose } = require('./diagnose');
+const { History, readJsonFile, readTextFile } = require('./history');
+const { diagnose, systemVolume } = require('./diagnose');
 const { diagnoseAt } = require('./replay');
 const { Workloads } = require('./workload');
 const { Notifier } = require('./notify');
@@ -40,7 +40,15 @@ const { collector } = require('./collect');
    two MUST agree or the launcher waits forever on a port nothing is listening to. */
 const PORT = +process.env.VITALS_PORT || 8790;
 const HERE = __dirname;
-const HIST_DIR = path.join(HERE, 'history');
+/* OVERRIDABLE, so the store can be pointed somewhere disposable. Not a feature for users — it is
+   what makes a BEHAVIOURAL test of the screen-read gate possible at all. That gate needs an admin
+   passphrase to exercise, a suite must never contain the owner's, and the credential store lives
+   here — so with this path hard-coded the only provable-by-driving guard in the product could
+   never be driven, and it was pinned by source inspection alone. Review found the obstacle was
+   never the passphrase; it was this line. */
+const HIST_DIR = process.env.VITALS_HIST_DIR
+  ? path.resolve(process.env.VITALS_HIST_DIR)
+  : path.join(HERE, 'history');
 const hist = new History(HIST_DIR);
 /* B5/B6. Sessions are periods of OBSERVED activity per named executable, not process lifetimes -
    `tick.proc` is a top-16, so a program going quiet drops off it and absence is not an exit. */
@@ -53,6 +61,51 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => { try { work.flush(); hist.flush(); } catch {} process.exit(0); });
 }
 const outcomes = new Outcomes(HIST_DIR);
+/* Automations read the ledger above and nothing else — what this machine has earned the right to
+   do without being asked. Constructed here because its evidence IS the outcomes record. */
+const { Automations } = require('./automate');
+const automations = new Automations(HIST_DIR, outcomes);
+/* Constructed, not started. The worker process only exists between the first sample request and
+   twenty seconds after the last — see peek.js for why that matters more here than elsewhere. */
+const { Peek } = require('./peek');
+let peek = null;   // real instance assigned once PS is resolved below
+/* An open window to read the screen: on disk so it survives nothing — a bridge restart is a fresh
+   process, and the file carries only an expiry, so a crashed panel cannot leave the door open
+   indefinitely. Capped hard: this is not a setting, it is a window. */
+/* ---- THE SCREEN-READ WINDOW: IN MEMORY, AND SCOPED TO ONE CALLER ----
+ * This was a file, `history/screen-grant.json`, and the file WAS the vulnerability. Ask runs with
+ * `acceptEdits` and cwd at the install, so anything with disk access could write itself a grant and
+ * never touch the passphrase at all — writing the file IS turning it on. The cap was checked when
+ * writing and never when reading, so a hand-written `until` in the year 3000 was honoured forever.
+ * Both problems are gone by construction here: there is nothing on disk to forge, and the clamp is
+ * applied on every read rather than once at the door.
+ *
+ * A restart now CLOSES the window, and that is the correct direction. The old file survived a crash,
+ * which meant a crash could leave the door open; a permission to look at somebody's screen should
+ * need re-asking after the process that was granted it has died.
+ *
+ * SCOPED TO A CALLER, which is the fix for the incident that prompted all of this. A window opened
+ * for the FX strip used to be a window for every client that could reach 127.0.0.1:8790 — a
+ * reviewing agent read the screen BY ACCIDENT because a different agent had opened one. The token
+ * is issued at /open, required by /api/peek, and counted per holder, so one human's permission is
+ * one caller's permission and the counter can finally answer "who".
+ */
+const SCREEN_MAX_MIN = 120;
+/* The largest grid the screen read will ever return — exactly what the panel asks for. */
+const PEEK_MAX_W = 64, PEEK_MAX_H = 24;
+let SCREEN = null;   // { until, token, why, reads }
+function screenGrant() {
+  if (!SCREEN) return { screenOpen: false };
+  const now = Date.now();
+  /* CLAMPED ON READ, not only on write. */
+  const until = Math.min(SCREEN.until, SCREEN.openedAt + SCREEN_MAX_MIN * 60_000);
+  if (until <= now) { SCREEN = null; return { screenOpen: false, expired: true }; }
+  return { screenOpen: true, until, minutesLeft: Math.round((until - now) / 60000),
+           why: (SCREEN.why || '').slice(0, 200), reads: SCREEN.reads };
+}
+/* The token never appears in a status payload — /api/peek/status is readable by anything, and a
+   status endpoint that hands out the credential is a status endpoint that grants the permission. */
+function screenTokenOk(t) { return !!SCREEN && !!t && t === SCREEN.token; }
 let ctl = null;   // constructed after ps() is defined below
 /* Resolved to an absolute path, not left to PATH - see pshost.js for the failure that taught us. */
 const { PS, PS_ARGS } = require('./pshost');
@@ -81,7 +134,21 @@ const PS_HOST = process.platform === 'win32';
    open to journal them. Capability is PROBED rather than assumed - a Linux box without libnotify
    and a Windows install with notifications disabled by policy are both "supported platforms" that
    cannot deliver, and the panel reports which. */
-const notifier = new Notifier({ psHost: PS_HOST });
+/* PS, THE RESOLVED PATH — not PS_HOST, which is a BOOLEAN (`process.platform === 'win32'`).
+   That one-word mistake was the whole reason notifications never appeared on this machine: the
+   Notifier spawns `psHost` as a program, so it was running `spawn(true)`, Node coerced it to the
+   string "true", and every send died with ENOENT. Nothing caught it because `probe()` only tested
+   the value for TRUTHINESS — `true` is extremely truthy — so the panel reported a healthy channel
+   while delivery was impossible. A boolean passed where a path was expected, and both ends agreed
+   it looked fine. See notify.js's constructor, which now refuses a non-string. */
+const notifier = new Notifier({ psHost: PS });
+/* The read log the AI surface writes, read here so the panel can answer "what has it seen?" and
+   "what is it asking for?" without a second store. */
+const { AiAccess } = require('./aiaccess');
+const aiAccess = new AiAccess(HIST_DIR);
+/* The staged-edit store. The bridge only lists, applies and rejects — it never proposes; that is
+   the agent's side, and keeping the two apart is what makes "the owner decides" structural. */
+const devedit = require('./devedit');
 notifier.probe().then((ok) => {
   console.error('[notify] ' + (ok ? 'can raise notifications via ' + notifier.how
                                   : 'this host cannot raise notifications; alerts stay on the page'));
@@ -155,10 +222,115 @@ const ACTION_ROUTES = new Set([
   '/api/openrecycle',
   '/api/mftscan',       // spawns an ELEVATED scan
   '/api/growthscan',    // walks the tree and writes a snapshot of the owner's folders
+  /* peek.js spawns PowerShell itself rather than going through ps(), which is exactly why the
+     call-graph check in test-routes.js could not see it: that guard only walks bridge.js. It
+     degraded honestly without this entry, but this list is the INVENTORY of what the Windows
+     build does that the others cannot, and a capability missing from the inventory is one that
+     nobody reviews and no port ever gets written for. */
   '/api/iotrace',       // spawns an ELEVATED trace
   '/api/clip',          // starts a background clipboard watcher
   '/api/files',         // filetools: reveal / lock-holder actions
+  '/api/ai/grant',      // release this machine's identifiers to an agent
+  '/api/ai/revoke',
+  '/api/ai/dev',        // the widest permission: stop redacting anything at all
+  '/api/ai/devoff',
+  '/api/ai/edit/apply', // change this install's own source
+  '/api/ai/edit/reject',
+  /* ARMING IS A WIDER PERMISSION THAN THE LEVER IT ARMS, and this list is where that has to be
+     said. Review found these gated for CSRF (MUTATES) but not for MODE: a viewer who is refused
+     POST /api/clean — "viewer reports the machine, it does not change it" — could still arm
+     clean_temp_on_pressure, which is EARNED on this machine right now, and let the bridge's own
+     30-second loop delete the files on their behalf. A standing grant handed to a role that is
+     denied the one-off act is the gap inverted.
+     Two gates, two questions: MUTATES asks "did a page ask for this properly", ACTION_ROUTES asks
+     "is this install allowed to do it at all". Adding to one is never adding to the other. */
+  /* Opening the screen-read window is the widest permission here, and viewer is the build you
+     hand to somebody else. Reading /api/peek is refused to viewer as a privacy-sensitive read;
+     being able to OPEN that door has to be refused too, or the first gate is decoration. */
+  /* /close is NOT here on purpose: a revocation must never be harder than the grant. Viewer mode
+     may always shut the window it cannot open — refusing that would mean handing someone a build
+     that can watch a door stay open and do nothing about it. */
+  '/api/peek/open',
+  '/api/automations/arm',
+  '/api/automations/disarm',
+  '/api/automations/targets',
+  '/api/automations/dismiss',
 ]);
+
+/* ================= EVERY ROUTE THAT CHANGES SOMETHING MUST BE ASKED FOR BY POST =================
+ *
+ * REVIEW FOUND THIS FILE ASSERTING IT ALREADY DID. The comment on /api/quarantine/act read "Every
+ * other mutating route in this file is POST-gated; these two were added without it." That sentence
+ * was false when it was written. Seventeen more were reachable by GET, verified with plain curl and
+ * no headers at all:
+ *
+ *   /api/panel/{mode,theme,view,top,alpha,blur}   200 {"ok":true}
+ *   /api/watching                                 200   ← tells VITALS a human is looking, which
+ *                                                         SUPPRESSES a critical notification
+ *   /api/alerts/test                              200   ← spends a real notification
+ *   /api/win/{min,close,rect,top,alpha,attach,...} 200  ← including close
+ *
+ * A GET is what an <img src> makes. Any page in any tab could close this window.
+ *
+ * AND `Sec-Fetch-Site` DOES NOT COVER IT, which is the part worth being clear about, because adding
+ * that header check is what made this look solved. It FAILS OPEN by design: absent is allowed,
+ * because absent is how curl, the MCP tool and the suites arrive. But absent is also Safari before
+ * 16.4, Firefox before 90, and embedded Chromium old enough to still ship without it - and this
+ * product has a FINISH_ON_A_MAC.md, so that is not a hypothetical browser. On a Mac running Safari
+ * 16.2 an <img src="http://127.0.0.1:8790/api/win/close"> still worked.
+ *
+ * Method gating is the control that does not fail open: a cross-origin <img>, <script>, <iframe> or
+ * <form> cannot issue a POST with a JSON content type, and cannot read the response whatever it
+ * issues. Sec-Fetch-Site stays as the second layer, which is what it should have been all along.
+ *
+ * ONE DECLARED TABLE, not seventeen edits, so this cannot drift again - and test-routes.js asserts
+ * the table against the live router, which is what turns it from a comment into a guard. Adding a
+ * route that writes anything means adding it here; the suite fails if a listed route answers a GET.
+ */
+const MUTATES = new Map([
+  /* Panel and window state. Not "the machine", so viewer mode deliberately allows them (see
+     ACTION_ROUTES) - but a foreign page must not drive them either. Two different questions. */
+  ['/api/panel/mode', null], ['/api/panel/theme', null], ['/api/panel/view', null],
+  ['/api/panel/top', null], ['/api/panel/alpha', null], ['/api/panel/blur', null],
+  ['/api/watching', null],
+  ['/api/alerts/test', null],
+  ['/api/frames', null],
+  /* Releasing identifiers to an agent is a change to what leaves this machine. */
+  ['/api/ai/grant', null], ['/api/ai/revoke', null],
+  ['/api/ai/dev', null], ['/api/ai/devoff', null],
+  ['/api/ai/edit/apply', null], ['/api/ai/edit/reject', null],
+  /* Arming changes what this machine may do WITHOUT BEING ASKED, which is a larger change than
+     any single lever pull — it is a standing grant rather than an act. Gated accordingly. */
+  ['/api/peek/open', null], ['/api/peek/close', null],
+  ['/api/automations/arm', null], ['/api/automations/disarm', null], ['/api/automations/dismiss', null],
+  ['/api/automations/targets', null],
+  /* Conditional: these serve a READ and an ACTION off one path, so the predicate decides. A route
+     that is sometimes a read cannot be gated by its name alone. */
+  ['/api/quarantine/act', (u) => (u.searchParams.get('do') || 'state') !== 'state'],
+  ['/api/replay', (u) => u.searchParams.get('go') === '1' || u.searchParams.get('stop') === '1'],
+]);
+/* Prefix form, for the /api/win/ verb map — ten verbs behind one handler. */
+const MUTATING_PREFIXES = ['/api/win/'];
+
+function mutatesTheMachine(p, url) {
+  if (MUTATES.has(p)) {
+    const pred = MUTATES.get(p);
+    return pred ? pred(url) : true;
+  }
+  return MUTATING_PREFIXES.some((x) => p.startsWith(x));
+}
+
+function methodGate(req, res, p, url) {
+  if (req.method === 'POST') return true;
+  if (!mutatesTheMachine(p, url)) return true;
+  json(res, 405, {
+    error: 'this route changes something, so it requires POST',
+    detail: 'GET is for reads. A state-changing GET can be fired by an image tag on any page in ' +
+            'any tab, which is why this is a method check and not only a header check.',
+    route: p,
+  });
+  return false;
+}
 
 /* ---- THE ADMIN PASSPHRASE ----
  *
@@ -183,7 +355,14 @@ const crypto = require('crypto');
 /* Same reasoning as the Ask key: outside the folder Ask runs in, so no file tool can reach it
    without an explicit --add-dir that nothing passes. `Ask.secretDir()` is the one implementation. */
 const { Ask: _AskCls } = require('./ask');
-const SECRET_DIR = (_AskCls.secretDir && _AskCls.secretDir()) || HIST_DIR;
+/* OVERRIDABLE for the same reason HIST_DIR is, and this is the one that actually mattered. Review
+   identified HIST_DIR as the obstacle to a behavioural test of the screen-read gate; it was one
+   level off. The admin passphrase lives in the SECRET dir — %LOCALAPPDATA%\vitals on Windows, far
+   outside the history folder — so isolating HIST_DIR alone still left a suite unable to set a
+   credential it was allowed to know, and the gate still untestable by driving it. */
+const SECRET_DIR = process.env.VITALS_SECRET_DIR
+  ? path.resolve(process.env.VITALS_SECRET_DIR)
+  : ((_AskCls.secretDir && _AskCls.secretDir()) || HIST_DIR);
 const PASS_FILE = path.join(SECRET_DIR, 'admin-pass.json');
 /* Same one-time migration for the passphrase, for the same reason: an upgrade that silently forgets
    someone's admin passphrase locks them out of their own install. */
@@ -244,6 +423,12 @@ const VIEWER_PRIVATE_ROUTES = new Set([
   '/api/files',      // file tools: sizes, owners, who has what open
   '/api/clip/img',   // saved clipboard images
   '/api/bundle',     // packages several of the above into one file
+  /* The most sensitive read in the product: the pixels of whatever is on screen. It changes
+     nothing, so it is not an ACTION — but viewer mode exists to be the build you can hand to
+     somebody else, and 'cannot change the machine, may photograph your screen' is not a coherent
+     description of a restricted mode. It belongs with the other reads that expose the owner
+     rather than the machine. */
+  '/api/peek',
 ]);
 /* Redaction for anything a viewer-mode session may still see. Identical reasoning to ask.js: SHAPE
    catches the paths no rule author anticipated, VALUE catches the identifiers this machine already
@@ -375,6 +560,12 @@ const WINDOWS_ONLY_ROUTES = new Set([
      Also removed: '/api/recycle', a route that does not exist. A phantom entry protected nothing
      while the real '/api/openrecycle' went unguarded - the hazard of writing this list from memory
      instead of from the router. */
+  /* THE SCREEN READ. peek.js spawns powershell.exe itself rather than going through ps(),
+     which is why the call-graph check could not see it — that graph walked bridge.js and this
+     product spans thirty files. It sat in NEITHER platform list, green, for as long as it
+     existed. open/close are here too: a window authorising a capability the host does not
+     have is a door onto a wall. */
+  '/api/peek', '/api/peek/status', '/api/peek/open', '/api/peek/close',
 ]);
 
 /* Routes from the set above that now have a NATIVE implementation on a non-Windows platform.
@@ -640,6 +831,12 @@ function ps(script, cb) {
     });
 }
 ctl = new Ctl(HIST_DIR, ps);
+/* Here rather than at the top because it needs the RESOLVED PowerShell path — `PS`, not the bare
+   name. pshost.js exists because three files once each resolved it their own way; passing the
+   resolved value is how a fourth avoids joining them. A host without PowerShell gets a Peek that
+   reports itself unavailable rather than one that throws on first use. */
+peek = new Peek(PS_HOST ? PS : null, HERE);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { try { peek.stop(); } catch {} });
 const { Journal } = require('./journal');
 const journal = new Journal(HIST_DIR);
 const { Ask } = require('./ask');
@@ -916,12 +1113,40 @@ const BUNDLE_SECTIONS = {
   diagnosis: { manifestOnly: true, what: 'the current ranked findings, inside the manifest' },
 };
 
+/* Headroom a capture requires before it may write. Review's finding, and it is the right shape of
+   guard: capture_on_critical triggers on disk_low and spiral, so the one moment it wants to run is
+   the moment the machine can least afford a few hundred MB. */
+const BUNDLE_MIN_FREE_GB = 3;
+/* Per-process counter so two bundles in the same second cannot collide (see stamp, below). */
+let BUNDLE_SEQ = 0;
+/* HOW MANY BUNDLES THIS INSTALL KEEPS. Nothing pruned these before — they were created and never
+   removed, which is fine while a human clicks the button occasionally and is not fine once an
+   automation makes up to six a day forever on a disk this product reports as 99% full. The product
+   maintaining its OWN artifacts is unconditional housekeeping, not something to ask permission for:
+   there is no version of "keep every diagnostic zip ever made" that anybody wants. */
+const BUNDLE_KEEP = 12;
+function pruneBundles() {
+  try {
+    const zips = fs.readdirSync(HIST_DIR).filter((f) => /^bundle-.*\.zip$/.test(f))
+      .map((f) => ({ f, t: (() => { try { return fs.statSync(path.join(HIST_DIR, f)).mtimeMs; } catch { return 0; } })() }))
+      .sort((a, b) => b.t - a.t);
+    for (const z of zips.slice(BUNDLE_KEEP)) {
+      try { fs.unlinkSync(path.join(HIST_DIR, z.f)); } catch {}
+    }
+    return zips.length - Math.min(zips.length, BUNDLE_KEEP);
+  } catch { return 0; }
+}
+
 function buildBundle(opts, cb) {
   opts = opts || {};
   const sections = opts.sections && typeof opts.sections === 'object' ? opts.sections : null;
   const on = (k) => (sections ? !!sections[k] : true);          // no selection given = everything
   /* the redactor is built in PASS 2 below, once the real name set is known */
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  /* THE STAMP MUST BE UNIQUE, not merely time-ordered. One-second resolution meant an automatic
+     capture and a manual bundle click in the same second shared a staging directory AND an output
+     path — so one run's Remove-Item deleted the other's staging tree mid-Compress-Archive. A
+     counter costs nothing and removes the whole class. */
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '-' + (++BUNDLE_SEQ);
   const outZip = path.join(HIST_DIR, `bundle-${stamp}${opts.redact ? '-redacted' : ''}.zip`);
   const staging = path.join(HIST_DIR, `.bundle-${stamp}`);
   const dropped = [];
@@ -933,7 +1158,21 @@ function buildBundle(opts, cb) {
     tickCadenceHz: hist.ring.length > 1 ? +(hist.ring.length / Math.max(hist.spanSec(), 1)).toFixed(2) : 0,
     historySpanSec: Math.round(hist.spanSec()),
     journal: journal.stats(),
-    diagnosis: on('diagnosis') ? (() => { try { return currentDiagnosis(); } catch { return null; } })() : '<not included>',
+    /* `opts.diagnosis` FIRST, and this is a correctness fix rather than an optimisation.
+       currentDiagnosis() drives the automation loop, and one of the automations calls buildBundle —
+       so a bundle that asks for a fresh diagnosis re-enters the loop that asked for the bundle.
+       Review reproduced it: ONE 30-second tick produced 830 nested buildBundle calls, recursing
+       until the stack blew, each level spawning Compress-Archive against the same staging dir while
+       other levels deleted it, on the disk-pressure incident that triggered it. The daily ceiling
+       could not stop it because a run is only recorded after its lever resolves, so every level saw
+       an untouched ceiling.
+       A caller that already HAS a diagnosis passes it. The automation lever does exactly that, so
+       the cycle cannot form; the re-entrancy guard in automate.js is the second line, not the first.
+       (Kept lazy for every other caller: the manual bundle button still wants a fresh one.) */
+    diagnosis: on('diagnosis')
+      ? (opts.diagnosis !== undefined ? opts.diagnosis
+        : (() => { try { return currentDiagnosis(); } catch { return null; } })())
+      : '<not included>',
     /* Stated so the recipient knows what they are NOT looking at, instead of inferring absence. */
     included: Object.keys(BUNDLE_SECTIONS).filter(on),
     omitted: Object.keys(BUNDLE_SECTIONS).filter((k) => !on(k)),
@@ -950,7 +1189,15 @@ function buildBundle(opts, cb) {
     for (const [key, sec] of Object.entries(BUNDLE_SECTIONS)) {
       if (sec.manifestOnly) continue;
       if (!on(key)) { dropped.push(key); continue; }
-      if (sec.days) want.push(`${sec.prefix}${dk(today)}.jsonl`, `${sec.prefix}${dk(yday)}.jsonl`);
+      /* `.jsonl.gz` TOO. Rotation gzips a day file once it is no longer today's, so asking only for
+         `<prefix>-<yday>.jsonl` asked for a name that reliably does not exist — and the missing-file
+         path is a silent `continue`, so every bundle quietly shipped without yesterday. That is the
+         one span an incident capture most needs: the before. Both names are requested and whichever
+         exists is taken; asking for both is how a rotation boundary stops being a cliff. */
+      if (sec.days) {
+        want.push(`${sec.prefix}${dk(today)}.jsonl`, `${sec.prefix}${dk(today)}.jsonl.gz`,
+                  `${sec.prefix}${dk(yday)}.jsonl`, `${sec.prefix}${dk(yday)}.jsonl.gz`);
+      }
       else want.push(...sec.files);
     }
     /* PASS 1: read everything, so names can be gathered across all files before any is rewritten. */
@@ -960,11 +1207,52 @@ function buildBundle(opts, cb) {
       const src = path.join(HIST_DIR, f);
       try {
         if (!fs.existsSync(src)) continue;
-        bytesIn += fs.statSync(src).size;
-        loaded.push([f, fs.readFileSync(src, 'utf8')]);
-      } catch {}
+        /* A .gz IS NOT TEXT, and reading it as UTF-8 does not fail — it SUBSTITUTES. Every byte
+           that is not valid UTF-8 becomes U+FFFD, so the real 283,801-byte rollup came back out at
+           516,639 bytes and gunzip refused it: "incorrect header check". That arrived as part of a
+           fix for bundles silently omitting yesterday, and it made the bug worse — a recipient who
+           believes they have the "before" and is holding noise is worse off than one who can see
+           the file is missing. Decompressed here so the content is real text from this point on:
+           it can then be redacted like everything else, and it lands in the zip readable, which is
+           what someone opening a support bundle actually wants. */
+        if (f.endsWith('.gz')) {
+          const name = f.replace(/\.gz$/, '');
+          /* Both can exist across a rotation boundary. The plain file is the live one, so it wins;
+             without this the archive would silently overwrite it under the same name in staging.
+             `continue` BEFORE the stat, so a file that ships once is counted once. */
+          if (loaded.some(([n]) => n === name)) continue;
+          bytesIn += fs.statSync(src).size;
+          loaded.push([name, require('zlib').gunzipSync(fs.readFileSync(src)).toString('utf8')]);
+        } else {
+          bytesIn += fs.statSync(src).size;
+          loaded.push([f, fs.readFileSync(src, 'utf8')]);
+        }
+      } catch (e) {
+        /* A CORRUPT ARCHIVE IS NOT AN ABSENT ONE. gunzip throwing here used to land in a bare
+           `catch {}`, which reinstated the exact silent omission this whole change set out to fix —
+           for the one case where the reader most needs telling, because a truncated .gz is what a
+           crash mid-rotation leaves behind. Recorded so the manifest says the file was meant to be
+           here and could not be read, rather than the bundle simply not containing it. */
+        dropped.push(`${f} — unreadable: ${e.message}`);
+      }
     }
+    /* TWO NUMBERS, BECAUSE ONE OF THEM STOPPED MEANING WHAT IT SAID. `sourceBytes` counts bytes
+       READ FROM DISK, and once a day file may arrive gzipped that is no longer the size of what
+       ships: measured on the reference machine, 411,510 read became 1,403,543 staged — a 3.4×
+       divergence under a name that reads like "how big is this bundle". Rather than redefine the
+       field (someone's script may already read it) both are stated, each labelled. */
     manifest.sourceBytes = bytesIn;
+    manifest.sourceBytesNote = 'bytes read from disk; a rotated day file is counted COMPRESSED, so '
+      + 'this is smaller than the content shipped whenever a .gz was expanded';
+    manifest.stagedBytes = loaded.reduce((n, [, t]) => n + Buffer.byteLength(t, 'utf8'), 0);
+    manifest.decompressed = want.filter((f) => f.endsWith('.gz')
+      && loaded.some(([n]) => n === f.replace(/\.gz$/, '')));
+    /* `dropped` WAS A DEAD ARRAY. It has been pushed to since this function was written and read
+       by nothing, so every section the caller deselected — and, once the load loop could fail, every
+       file that could not be read — was recorded and then discarded. Surfaced now, which is the
+       whole point of the array: a recipient who can see WHY something is absent is in a different
+       position from one staring at a bundle that simply does not contain it. */
+    manifest.dropped = dropped;
     /* PASS 2: build the redactor with the real name set, then write.
        The name set must NOT depend on the live tick. The first version harvested from `latest.proc`,
        which is null for the first few seconds after a bridge restart, so a bundle taken in that window
@@ -1014,7 +1302,10 @@ function buildBundle(opts, cb) {
     (e, d) => {
       try { fs.rmSync(staging, { recursive: true, force: true }); } catch {}
       if (e) return cb(e);
-      cb(null, { ...d, manifest });
+      /* Pruned AFTER a successful write, not before: trimming first would delete old evidence to
+         make room for a bundle that then fails, which is the worst possible order. */
+      const pruned = pruneBundles();
+      cb(null, { ...d, manifest, pruned });
     });
 }
 
@@ -1589,8 +1880,106 @@ function currentDiagnosis() {
      rules stay in one readable place. */
   const watching = (Date.now() - watchingAt < 15_000) && (watchingView === 'diag' || watchingView === 'ov');
   notifier.consider(d, { watching }).catch((e) => console.error('[notify]', e.message));
+  /* Automations run on the same 30 s clock, AFTER observe() — so the ledger already contains this
+     tick's firings when the automation asks whether it has earned the right to act on them.
+     Levers are injected rather than imported, which is what lets the suite drive every branch
+     without deleting a file; it is also the list of what an automation may reach, in one place
+     that can be read in five seconds. Anything not named here is not reachable, by construction. */
+  automations.consider(d, latest, {
+    /* ACTUALLY sequential. The first version said "Sequential" in this comment and used forEach,
+       which launches every target at once — two concurrent recursive-delete PowerShells during a
+       disk-pressure incident, which is the worst moment to double the I/O. It also rejected the
+       whole run if ANY target failed, discarding the other target's real freedGB and recording the
+       automation's benefit as null: a run that genuinely returned a gigabyte was filed as "no
+       measured result", which is the one column the demotion rule reads.
+       Now: one at a time, partial results kept, per-target errors carried alongside them. A
+       failure is a fact about that target, not about the run. */
+    clean: (params) => new Promise((resolve) => {
+      const keys = (params && params.keys) || [];
+      if (!keys.length) return resolve({ keys, freedGB: 0, errors: [] });
+      const errors = [];
+      let freed = 0, i = 0;
+      const next = () => {
+        if (i >= keys.length) {
+          /* EVERY TARGET FAILED IS NOT "IT FREED NOTHING". Resolving with 0 filed a lever that was
+             blocked — PowerShell broken, every entry denied — as a successful run that measured
+             zero, which then fed the episode arithmetic as a real observation. Null travels, zero
+             lies: with no target reached there is no measurement, and the run records as
+             unmeasured rather than as a success worth nothing. */
+          const allFailed = errors.length === keys.length;
+          return resolve({ keys, errors, ok: !allFailed,
+                           freedGB: allFailed ? null : Math.round(freed * 100) / 100 });
+        }
+        const k = keys[i++];
+        clean(k, (e, r) => {
+          if (e) errors.push({ key: k, error: e.message });
+          else if (r && typeof r.freedGB === 'number') freed += r.freedGB;
+          next();
+        });
+      };
+      next();
+    }),
+    growthscan: () => new Promise((resolve, reject) => {
+      if (growthScanState.running) return reject(new Error('a growth scan is already running'));
+      const root = require('os').homedir();
+      const out = path.join(HIST_DIR, `walk-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
+      growthScanState = { running: true, startedAt: Date.now(), root, last: null };
+      execFile(process.execPath, [path.join(HERE, 'growthscan.js'), '--root', root, '--out', out],
+        { timeout: 15 * 60_000, maxBuffer: 1 << 20 }, (e) => {
+          growthScanState = { running: false, startedAt: null, root, last: e ? null : out };
+          e ? reject(e) : resolve({ out });
+        });
+    }),
+    /* Incident capture. The bundle builder already exists for the support button; the only thing
+       an automation adds is being there at the moment it breaks, which is the part a human
+       reliably cannot do. Reads only — it collects what has already been measured. */
+    /* `diagnosis: d` is what breaks the cycle — see buildBundle. It is also simply more correct:
+       this bundle is meant to capture the incident that triggered it, and `d` IS that diagnosis.
+       Re-deriving it a moment later would describe a slightly different machine. */
+    bundle: () => new Promise((resolve, reject) => {
+      /* A CAPTURE MUST NOT BE THE THING THAT FILLS THE DISK. Its triggers include disk_low and
+         spiral, so the one moment it wants to run is the moment the machine can least afford a
+         few hundred MB. Refused below the floor, and the refusal is recorded like any other. */
+      const sv = systemVolume(latest);
+      const freeGB = sv && sv.freeGB != null ? sv.freeGB : null;
+      if (freeGB != null && freeGB < BUNDLE_MIN_FREE_GB) {
+        return reject(new Error(`only ${freeGB} GB free — a capture needs ${BUNDLE_MIN_FREE_GB} GB `
+          + `of headroom, and writing one here would make the incident it is documenting worse`));
+      }
+      buildBundle({ reason: 'automatic capture — a critical finding appeared', diagnosis: d },
+        (e, r) => (e ? reject(e) : resolve(r)));
+    }),
+    /* The disruptive tier's ONLY channel. It cannot act; it can put the finding in front of a
+       human.
+
+       IT DOES NOT NOTIFY, and the comment here used to claim it did ("routed through the notifier
+       so it obeys the same suppression rules") — which was false the moment it was written. A
+       comment describing a guard that is not in the code below it is worse than no comment: it is
+       the thing a reviewer trusts instead of reading.
+
+       Not notifying is the right behaviour, which is why the fix is the comment rather than the
+       code. A proposal waits on the Automations page; it interrupts nothing, so there is nothing
+       for the notifier's suppression rules to protect. The moment this DOES grow a notification —
+       and "your editor is leaking, restart it?" is a plausible thing to want raised — it must go
+       through notifier.consider() and inherit every rule there, because an automation is not
+       entitled to a louder voice than a critical finding. */
+    propose: (payload) => {
+      pendingProposals = pendingProposals.filter((x) => x.id !== payload.id);
+      pendingProposals.push({ ...payload, at: Date.now() });
+      return { asked: true, queued: pendingProposals.length };
+    },
+    /* gov.allow() is the same question every deferrable job asks, so an observe automation defers
+       on exactly the evidence the rest of the product defers on — and inherits its honest limit:
+       with no panel rendering there is no stall SIGNAL, and the governor answers "run", because
+       "we cannot see" must never be read as "the machine is struggling". */
+  }, { stalling: !gov.allow('automation').run })
+    .catch((e) => console.error('[automate]', e.message));
   return d;
 }
+/* Proposals a disruptive automation has raised and a human has not answered. In memory on
+   purpose: an unanswered "shall I restart Chrome?" from four days ago is noise, not a task, and
+   the condition will simply re-raise it if it still holds. */
+let pendingProposals = [];
 setInterval(currentDiagnosis, 30000);
 
 /* ---------------- server ---------------- */
@@ -1656,6 +2045,27 @@ function localOnly(req, res) {
       return false;
     }
   }
+  /* AN ABSENT Origin WAS A PASS, AND THAT WAS THE HOLE.
+     Only `if (origin)` was checked, so anything a browser sends WITHOUT an Origin sailed through
+     on a genuine loopback Host: an <img src>, a <script src>, an <iframe>, a form GET. Verified
+     against the running bridge during review - a no-Origin GET to a state-changing route returned
+     200 while the same request with a hostile Origin was correctly refused. The guard was only ever
+     stopping the attacker who volunteered their name.
+
+     `Sec-Fetch-Site` closes it. Every current browser sends it on every request, JavaScript cannot
+     forge it, and it says what Origin omits: `cross-site` for that <img>, `same-origin` for our own
+     panel, `none` for a URL the user typed. Absent means a non-browser client - curl, the MCP tool,
+     the suites - which is not the threat this guard is for and is left alone. */
+  const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (site && site !== 'same-origin' && site !== 'none') {
+    json(res, 403, {
+      error: 'cross-site requests are refused',
+      detail: `This request arrived as "${site}" — it was made by a page on another site, not by ` +
+              'the VITALS panel. Loading an image or a script cannot be allowed to drive this machine.',
+    });
+    return false;
+  }
+
   /* Strip the port, and the brackets an IPv6 literal arrives in. */
   const hostHeader = String(req.headers.host || '').replace(/:\d+$/, '');
   if (hostHeader && !LOOPBACK.test(hostHeader)) {
@@ -1675,6 +2085,7 @@ const server = http.createServer((req, res) => {
 
   /* FIRST, before the page, before any route. A check that some paths skip is a check with a hole. */
   if (!localOnly(req, res)) return;
+  if (!methodGate(req, res, p, url)) return;
 
   if (p === '/' || p === '/index.html') {
     fs.readFile(path.join(HERE, 'dashboard.html'), (e, d) => {
@@ -1972,6 +2383,10 @@ const server = http.createServer((req, res) => {
       if (!st || !st.isDirectory()) return json(res, 400, { error: 'root is not a readable directory', root });
       const out = path.join(HIST_DIR, `walk-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`);
       growthScanState = { running: true, startedAt: Date.now(), root, last: null };
+      /* Recorded as a lever, like every other thing you choose to do. Without this the automations
+         page could never earn the daily scan: "you have run this by hand N times" has to be counted
+         somewhere, and a manual scan that leaves no trace is a choice the record never saw. */
+      outcomes.lever('growthscan', { root, manual: true }, latest);
       /* 15 minutes of budget: a first walk over a large spinning-disk home can genuinely take
          that. execFile, not spawn - its callback IS the error handler, so a missing binary cannot
          re-create the crash class test-routes.js hunts for. */
@@ -2015,6 +2430,9 @@ const server = http.createServer((req, res) => {
   if (p === '/api/quarantine/act') {
     if (!PS_HOST) return json(res, 501, { error: 'the quarantine ladder is Windows-only for now' });
     const act = url.searchParams.get('do') || 'state';
+    /* Reads may be GET; actions may not. `state` only reports which rung a process is on, so this
+       route is in the MUTATES table with a predicate rather than a flat entry - the gate ran before
+       routing and this handler is only reached once it has passed. */
     const target = +url.searchParams.get('pid');
     const cores = +url.searchParams.get('cores') || 2;
     if (!['state', 'priority', 'affinity', 'suspend', 'release'].includes(act)) {
@@ -2051,6 +2469,8 @@ const server = http.createServer((req, res) => {
      `?profile=` reads a window and returns what would be reproduced WITHOUT doing it, so the panel
      can show the load before anyone agrees to it. `?go=1` starts it, `?stop=1` ends it. */
   if (p === '/api/replay') {
+    /* Same shape: status and `?profile=1` are reads, starting and stopping a load are not. Gated by
+       predicate in MUTATES, above, before routing. */
     if (url.searchParams.get('stop') === '1') return json(res, 200, replay.stop('asked to stop'));
 
     const to = +url.searchParams.get('to') || Date.now();
@@ -2108,6 +2528,184 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  /* ================= THE CONSENT LOOP FOR AI IDENTIFIER ACCESS =================================
+   *
+   * The MCP server replaces identifiers with stable local tags and treats `identifiers:true` as a
+   * REQUEST rather than a grant. These three routes are the other half: the place a human sees the
+   * request and answers it. Without them the answer is always "no", which is safe and useless — a
+   * locked door is not a consent loop.
+   *
+   * A pending request is not a new file. The access log already records every ask with
+   * `identifiers:true, granted:false`, so "what is waiting" is a QUERY over the record rather than
+   * a second store that can disagree with it.
+   * =========================================================================================== */
+  if (p === '/api/ai/access') {
+    const since = Date.now() - (+url.searchParams.get('mins') || 30) * 60_000;
+    const rows = aiAccess.recent(400);
+    /* An ask older than the window is not pending, it is history: answering a request from
+       yesterday would hand data to a task that finished long ago. */
+    const pending = rows.filter((r) => r.ev === 'read' && r.identifiers === true
+                                    && r.granted === false && r.at >= since);
+    return json(res, 200, {
+      summary: aiAccess.summary(),
+      recent: rows.slice(0, 40),
+      pending: pending.slice(0, 10),
+      grant: aiAccess.grant(),
+      dev: aiAccess.dev(),
+      /* NAMED FOR WHAT IT IS. It was `passphraseRequired`, which reads as "a passphrase is
+         needed" — and the passphrase is ALWAYS needed, so the flag looked like a policy switch
+         rather than a fact about this install. It is "one exists". The panel branches on it to
+         decide whether to show the input or tell you to set one first. */
+      hasPassphrase: hasAdminPass(),
+      mode: MODE,
+    });
+  }
+
+  /* THREE TIERS, AND EACH ONE COSTS MORE THAN THE LAST.
+   *
+   *   viewer      never releases identifiers. Not with a passphrase, not with a toggle. The mode
+   *               exists to say "this install does not act on the machine", and handing out its
+   *               MAC is acting on it.
+   *   admin       may release identifiers, but the PASSPHRASE IS REQUIRED every time. Not "if one
+   *               is set" — required. If none is set the request is refused with an instruction to
+   *               set one, because a gate that disappears when unconfigured is not a gate, and the
+   *               first version of this quietly became one on a machine with no passphrase.
+   *   developer   the widest door: nothing is redacted at all, because an agent WORKING ON the
+   *               software needs the real numbers. Passphrase, an explicit confirmation, and a
+   *               clock. See /api/ai/dev.
+   */
+  if (p === '/api/ai/grant') {
+    if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode cannot approve identifier access' });
+    return readBody(req, (b) => {
+      if (!hasAdminPass()) {
+        /* Refused, not waved through. The alternative — allowing it because no passphrase exists —
+           makes the strength of the control depend on whether anyone got round to configuring it,
+           which is exactly backwards for a control that releases data. */
+        return json(res, 403, {
+          error: 'set an admin passphrase first',
+          detail: 'Releasing this machine\'s identifiers requires the passphrase every time. ' +
+                  'There is no passphrase on this install yet — set one on the SYS page, then ' +
+                  'approve the request.',
+          needsPassphrase: true,
+        });
+      }
+      if (passRateLimited()) return json(res, 429, { error: 'too many attempts — wait a minute' });
+      if (!checkAdminPass(b && b.pass)) { notePassFailure(); return json(res, 403, { error: 'wrong passphrase' }); }
+      /* THE SAME EXPLICIT YES DEVELOPER MODE NEEDS. Releasing identifiers is smaller in scope but
+         identical in kind — data about this machine leaves it — and a passphrase alone proves only
+         that the right person clicked, not that they knew what the click did. Both tiers now cost:
+         passphrase, confirmation, and a clock. */
+      if (b && b.confirm !== true) {
+        return json(res, 400, {
+          error: 'confirmation required',
+          detail: 'Approving this releases the real MAC, IP, gateway, DNS and Wi-Fi name to the ' +
+                  'agent for the window you choose. Send confirm:true once that has been shown.',
+        });
+      }
+      const mins = Math.max(1, Math.min(240, +(b && b.minutes) || 20));
+      const why = String((b && b.why) || '').slice(0, 200);
+      const until = Date.now() + mins * 60_000;
+      try {
+        fs.writeFileSync(path.join(HIST_DIR, 'identifier-grant.json'),
+                         JSON.stringify({ until, why, at: Date.now() }, null, 1));
+      } catch (e) { return json(res, 500, { error: 'could not write the grant: ' + e.message }); }
+      /* Logged in the same record the reads are in, so the approval and what it enabled read as one
+         sequence rather than two files someone has to correlate. */
+      aiAccess.note({ ev: 'grant-opened', minutes: mins, why, until });
+      return json(res, 200, { ok: true, until, minutes: mins });
+    });
+  }
+
+  /* DEVELOPER MODE — the widest permission in the product, and the only one that turns redaction
+   * off wholesale. An agent iterating on the collector needs the real numbers, the real adapter
+   * names and the real connections; that is a legitimate need and it is also the most dangerous
+   * thing this panel can hand out, so it costs the most to open:
+   *
+   *   a deliberate toggle   it is not a side effect of anything else
+   *   the passphrase        the same bar as releasing identifiers, because it releases more
+   *   an explicit YES       `confirm: true`, which the panel only sends after showing the warning
+   *   a clock               capped like every other window, so forgetting costs hours not months
+   */
+  if (p === '/api/ai/dev') {
+    if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode cannot open developer mode' });
+    return readBody(req, (b) => {
+      if (!hasAdminPass()) {
+        return json(res, 403, {
+          error: 'set an admin passphrase first',
+          detail: 'Developer mode turns redaction off entirely. It requires the admin passphrase, ' +
+                  'and this install does not have one yet — set it on the SYS page.',
+          needsPassphrase: true,
+        });
+      }
+      if (passRateLimited()) return json(res, 429, { error: 'too many attempts — wait a minute' });
+      if (!checkAdminPass(b && b.pass)) { notePassFailure(); return json(res, 403, { error: 'wrong passphrase' }); }
+      /* The confirmation is a FLAG THE PANEL SENDS ONLY AFTER SHOWING THE WARNING. It is not
+         security — anything that can POST can set it — it is a guarantee that the sentence
+         explaining what this does was on screen before it happened. */
+      if (b && b.confirm !== true) {
+        return json(res, 400, {
+          error: 'confirmation required',
+          detail: 'Developer mode stops redacting anything an agent reads from this machine. ' +
+                  'Send confirm:true once the warning has actually been shown.',
+        });
+      }
+      const mins = Math.max(1, Math.min(240, +(b && b.minutes) || 60));
+      const until = Date.now() + mins * 60_000;
+      try {
+        fs.writeFileSync(path.join(HIST_DIR, 'dev-mode.json'),
+                         JSON.stringify({ until, why: String((b && b.why) || 'opened from the panel').slice(0, 160), at: Date.now() }, null, 1));
+      } catch (e) { return json(res, 500, { error: 'could not open developer mode: ' + e.message }); }
+      console.error('[ai] DEVELOPER MODE opened for ' + mins + ' min — nothing is redacted while it lasts');
+      aiAccess.note({ ev: 'dev-opened', minutes: mins, until });
+      return json(res, 200, { ok: true, until, minutes: mins });
+    });
+  }
+
+  /* ---- PROPOSED EDITS: approval is for a DIFF, not a window ------------------------------------
+   * Every other permission here is time-boxed, which is right for reading and wrong for writing: a
+   * window opened to fix one line will happily accept twenty more. So a risky edit is staged, the
+   * owner sees the actual change, and approving approves THAT change once. The apply path re-checks
+   * the content hash, so what lands is what was on screen. */
+  if (p === '/api/ai/edits') {
+    return json(res, 200, { pending: devedit.listProposals(), mode: MODE, hasPassphrase: hasAdminPass() });
+  }
+
+  if (p === '/api/ai/edit/apply') {
+    if (MODE === 'viewer') return json(res, 403, { error: 'viewer mode cannot approve edits' });
+    return readBody(req, (b) => {
+      if (!hasAdminPass()) return json(res, 403, { error: 'set an admin passphrase first',
+        detail: 'Applying an edit to this install requires the passphrase.', needsPassphrase: true });
+      if (passRateLimited()) return json(res, 429, { error: 'too many attempts — wait a minute' });
+      if (!checkAdminPass(b && b.pass)) { notePassFailure(); return json(res, 403, { error: 'wrong passphrase' }); }
+      if (!b || b.confirm !== true) return json(res, 400, { error: 'confirmation required',
+        detail: 'Send confirm:true once the diff has actually been shown.' });
+      const r = devedit.applyProposal(b.id);
+      aiAccess.note({ ev: r.error ? 'edit-apply-failed' : 'edit-applied', id: b.id,
+                      file: r.file || null, detail: r.error || null });
+      return json(res, r.error ? 400 : 200, r);
+    });
+  }
+
+  if (p === '/api/ai/edit/reject') {
+    return readBody(req, (b) => {
+      const r = devedit.rejectProposal(b && b.id);
+      aiAccess.note({ ev: 'edit-rejected', id: (b && b.id) || null });
+      return json(res, 200, r);
+    });
+  }
+
+  if (p === '/api/ai/devoff') {
+    try { fs.unlinkSync(path.join(HIST_DIR, 'dev-mode.json')); } catch {}
+    aiAccess.note({ ev: 'dev-closed' });
+    return json(res, 200, { ok: true, dev: aiAccess.dev() });
+  }
+
+  if (p === '/api/ai/revoke') {
+    try { fs.unlinkSync(path.join(HIST_DIR, 'identifier-grant.json')); } catch {}
+    aiAccess.note({ ev: 'grant-revoked' });
+    return json(res, 200, { ok: true, grant: aiAccess.grant() });
+  }
+
   if (p === '/api/governor') {
     return json(res, 200, { ...gov.status(), deferred: govDeferrals.slice(-15) });
   }
@@ -2158,6 +2756,140 @@ const server = http.createServer((req, res) => {
   if (p === '/api/hardware') return json(res, 200, cachedHw || { pending: true,
     note: PS_HOST ? 'not collected yet' : 'this platform has no hardware one-shot' });
 
+  /* ---- automations ----
+     GET is a read of what this machine has earned; the two POSTs change what it may do unasked,
+     so they sit behind the same mutating-method gate as every other lever. */
+  /* COUNTS ONLY, for the nav badge. The badge poll runs every 10 s forever, and answering it with
+     the full list() meant four evidenceFor() calls, each reading and parsing the whole outcomes
+     ledger — 237 KB today, growing ~17 MB a year — four times, every ten seconds, to produce one
+     integer. The badge needs a number; this returns the number. */
+  if (p === '/api/automations' && url.searchParams.get('counts') === '1') {
+    return json(res, 200, { proposals: pendingProposals.length });
+  }
+  if (p === '/api/automations') {
+    /* WHAT IT ACTUALLY DID, on the same page that offers to let it. An automations screen with no
+       record of its own automatic runs asks for a standing permission and then never reports on
+       it — which is the shape of every background process anyone has ever regretted enabling. */
+    return json(res, 200, {
+      ...automations.list({ aiGranted: aiAccess.grant().on, has: { powershell: !!PS_HOST } }),
+      proposals: pendingProposals,
+      history: outcomes.recent(4000).filter((r) => r.ev === 'auto').slice(-60).reverse(),
+    });
+  }
+  if (req.method === 'POST' && (p === '/api/automations/arm' || p === '/api/automations/disarm')) {
+    return readBody(req, (b) => {
+      const id = b && b.id ? String(b.id) : '';
+      if (p === '/api/automations/disarm') return json(res, 200, automations.disarm(id));
+      /* NO `force` FROM THE WIRE. The suite uses it to reach paths that would otherwise need a
+         month of history; exposing it over HTTP would make the earning rule optional, which is
+         the same as not having it. The only way past the record is to build the record. */
+      const r = automations.arm(id, { aiGranted: aiAccess.grant().on, has: { powershell: !!PS_HOST } });
+      return json(res, r.error ? 400 : 200, r);
+    });
+  }
+  if (req.method === 'POST' && p === '/api/automations/targets') {
+    return readBody(req, (b) => {
+      const r = automations.setTargets(b && b.id ? String(b.id) : '', (b && b.keys) || []);
+      return json(res, r.error ? 400 : 200, r);
+    });
+  }
+  if (req.method === 'POST' && p === '/api/automations/dismiss') {
+    return readBody(req, (b) => {
+      const id = b && b.id ? String(b.id) : '';
+      pendingProposals = pendingProposals.filter((x) => x.id !== id);
+      return json(res, 200, { ok: true, remaining: pendingProposals.length });
+    });
+  }
+
+  /* ---- screen peek: the only thing in VITALS that looks at the display ----
+     A brightness grid of one screen rectangle, for the FX strip's thermal read. GET because it
+     changes nothing — but it READS something more sensitive than anything else here, so it carries
+     its own rules rather than inheriting the ordinary read path:
+       · the worker starts on the first request and dies 20 s after the last;
+       · the grid is capped, luminance-only, and never written to disk;
+       · every sample is counted, and /api/peek/status reports the count, so "is it looking at my
+         screen" is answerable from the panel instead of taken on trust.
+     Viewer mode is allowed it: viewer's rule is that it may not CHANGE the machine, and this does
+     not. The control that matters here is the owner's toggle, which is off by default. */
+  /* ---- THE SCREEN-READ WINDOW ----
+     Every rule written for this feature guarded the OWNER'S switch: off by default, counted, named
+     in the caption, refused to viewer. None of them guarded the SOFTWARE. The route was reachable
+     by anything that could talk to the bridge, so an agent was handed the endpoint and sampled the
+     owner's screen 2,129 times before he noticed — not by exploiting anything, just by asking. The
+     disclosure worked; the permission did not exist.
+     So a request to read the screen now needs an open WINDOW, opened by a human with the admin
+     passphrase, confirmed, and self-expiring — the same shape as developer mode, and for a stronger
+     reason: that one widens what an agent may be TOLD, this one decides whether the software may
+     LOOK. An agent can still ask. It just cannot be the one who says yes. */
+  if (p === '/api/peek/status') {
+    /*  lets the panel HIDE the control on a host that cannot do this, instead of
+       prompting for an admin passphrase and a duration and then 501-ing. A control that asks you to
+       authenticate for something it cannot do is worse than an absent one. */
+    return json(res, 200, { available: !!PS_HOST, ...peek.status(), ...screenGrant() });
+  }
+  if (req.method === 'POST' && p === '/api/peek/open') {
+    return readBody(req, (b) => {
+      if (!hasAdminPass()) {
+        return json(res, 400, { error: 'set an admin passphrase first',
+          detail: 'Reading the screen is the one thing this software does that looks outside '
+                + 'itself. It is not available without a passphrase to gate it.' });
+      }
+      if (passRateLimited()) return json(res, 429, { error: 'too many attempts — wait a minute' });
+      if (!checkAdminPass(b && b.pass)) { notePassFailure(); return json(res, 403, { error: 'wrong passphrase' }); }
+      if (!b || b.confirm !== true) return json(res, 400, { error: 'not confirmed' });
+      const mins = Math.max(1, Math.min(SCREEN_MAX_MIN, parseInt(b.minutes, 10) || 15));
+      const now = Date.now();
+      /* The token is the permission. Returned ONCE, here, to the caller who proved the passphrase —
+         and never repeated by any other route, so possessing it means having been through this door
+         rather than having asked politely afterwards. */
+      const token = require('crypto').randomBytes(24).toString('hex');
+      SCREEN = { openedAt: now, until: now + mins * 60_000, token, why: String(b.why || '').slice(0, 200), reads: 0 };
+      aiAccess.note({ ev: 'screen-opened', minutes: mins, until: SCREEN.until });
+      return json(res, 200, { ok: true, token, ...screenGrant() });
+    });
+  }
+  if (req.method === 'POST' && p === '/api/peek/close') {
+    SCREEN = null;
+    try { peek.stop(); } catch {}
+    aiAccess.note({ ev: 'screen-closed' });
+    return json(res, 200, { ok: true, ...screenGrant() });
+  }
+  if (p === '/api/peek') {
+    /* THE GATE, before anything else in this handler. Refused with the reason and the way to open
+       it, because an agent that is told "no" and why can report that to its owner, whereas one
+       that gets an opaque 403 will reasonably conclude the feature is broken and try harder. */
+    const gr = screenGrant();
+    if (!gr.screenOpen) {
+      return json(res, 200, { error: 'the screen-read window is closed', refused: 'not-open',
+        detail: 'Reading the screen needs a window opened by a human: POST /api/peek/open with the '
+              + 'admin passphrase and confirm:true. It expires by itself, and it closes when this '
+              + 'process does. This cannot be opened by the thing that wants to read.' });
+    }
+    /* AND THE TOKEN. An open window is not a public window — that was the whole defect: a window
+       opened for the FX strip made the screen readable by every client that could reach this port,
+       and a reviewing agent read it by accident on somebody else's grant. The permission belongs to
+       the caller who proved the passphrase, not to the socket. */
+    if (!screenTokenOk(url.searchParams.get('token'))) {
+      return json(res, 200, { error: 'a screen-read window is open, but not for you',
+        refused: 'not-your-window',
+        detail: 'The token issued when the window was opened must be presented as ?token=. Another '
+              + 'caller holding a window does not make the screen readable by anyone else.' });
+    }
+    SCREEN.reads++;
+    const n = (k, d) => { const v = parseInt(url.searchParams.get(k), 10); return Number.isFinite(v) ? v : d; };
+    /* CLAMPED TO WHAT SHIPS. The cap was 128x128 = 49,152 bytes of colour — icon resolution,
+       recognisable — while the panel has only ever asked for 64x24 = 4,608. An API ceiling nobody
+       uses is not a spare capability, it is the number an auditor is entitled to hold you to. The
+       header in peek.js now claims this bound; here is where the claim is made true. */
+    const gw = Math.max(1, Math.min(PEEK_MAX_W, n('gw', 64))), gh = Math.max(1, Math.min(PEEK_MAX_H, n('gh', 24)));
+    return peek.sample(n('x', 0), n('y', 0), n('w', 0), n('h', 0), gw, gh)
+      .then((r) => json(res, 200, { gw: r.gw, gh: r.gh, grid: Buffer.from(r.grid).toString('base64') }))
+      /* 200 with an `error`, not a 5xx: "the screen could not be read" is a normal answer here (the
+         worker is starting, a sample is already in flight, the host has no PowerShell) and the
+         caller's correct response to all of them is the same — carry on without a reading. */
+      .catch((e) => json(res, 200, { error: e.message }));
+  }
+
   if (p === '/api/alerts') {
     if (req.method === 'POST') {
       /* Viewer mode may not change how the machine behaves, and silencing the alarm is a change
@@ -2200,8 +2932,11 @@ const server = http.createServer((req, res) => {
     const t = +url.searchParams.get('t');
     if (!Number.isFinite(t) || t <= 0) return json(res, 400, { error: 'need ?t=<epoch ms>' });
     if (t > Date.now()) return json(res, 400, { error: 'that moment has not happened yet' });
-    const liveVol = latest && latest.disk && (latest.disk.vols || [])
-      .find((v) => v.id === 'C:' || v.id === '/');
+    /* systemVolume(), not a two-name find. This one had no fallback at all, so a Windows install on
+       D: or an unusual mount layout produced `undefined` rather than a volume - the same class of
+       Windows assumption diagnose.js and outcomes.js were already fixed for, found by grepping the
+       tree after the second one. */
+    const liveVol = systemVolume(latest);
     let d;
     try {
       d = diagnoseAt(hist, t, { outcomes, liveVolId: liveVol ? liveVol.id : null });
@@ -2260,7 +2995,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (p === '/api/scanlog') {
-    try { return json(res, 200, { log: fs.readFileSync(path.join(HIST_DIR, 'scan.log'), 'utf8') }); }
+    /* readTextFile, not readFileSync(...,'utf8'): mftscan's log is written by a PowerShell `*>`
+       redirection, which in PS 5.1 is UTF-16LE with a BOM. Read as utf8 it served mojibake. */
+    try { return json(res, 200, { log: readTextFile(path.join(HIST_DIR, 'scan.log')) }); }
     catch { return json(res, 200, { log: '' }); }
   }
 

@@ -1,6 +1,6 @@
 # Installing VITALS
 
-**Version 0.9.2.** Pre-1.0 on purpose: Windows is complete and measured, Linux is verified end to
+**Version 0.9.9.** Pre-1.0 on purpose: Windows is complete and measured, Linux is verified end to
 end, macOS runs green in CI on real Apple Silicon but still awaits a physical Mac for its battery,
 GPU and thermal paths (`FINISH_ON_A_MAC.md` is that process, one command), and the action layer
 (kill, clean, restart, dials) is Windows-only. Those four facts are what 1.0 would have to close.
@@ -43,14 +43,14 @@ There are no npm dependencies. `node_modules` does not exist and nothing will tr
 
 ### The short way: double-click Setup
 
-If you downloaded a **portable bundle** — `vitals-0.9.2-win-x64.zip`, `-mac-arm64.tar.gz`,
+If you downloaded a **portable bundle** — `vitals-0.9.9-win-x64.zip`, `-mac-arm64.tar.gz`,
 `-linux-x64.tar.gz` and so on — the Node runtime is already inside it. Nothing needs installing
 first, on any platform.
 
 | Platform | Unpack | Then |
 |---|---|---|
 | **Windows** | Right-click the .zip → Extract All | Double-click **`Setup.cmd`** |
-| **macOS / Linux** | `tar -xzf vitals-0.9.2-<target>.tar.gz` | `cd` in and run **`./setup.sh`** |
+| **macOS / Linux** | `tar -xzf vitals-0.9.9-<target>.tar.gz` | `cd` in and run **`./setup.sh`** |
 
 Setup verifies every file it shipped with, finds the runtime, probes what this platform can measure,
 then takes a real reading of your machine and shows it to you. There is no progress bar estimating

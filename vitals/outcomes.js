@@ -33,18 +33,56 @@ const SUPPRESSORS = {
   disk_fill_ahead: ['disk_low', 'spiral'],
 };
 
+const { systemVolume } = require('./diagnose');
+
+/* A CEILING, NOT A RETENTION POLICY — and the difference is the whole point.
+   This ledger is the product's long-term memory: "last time this fired, here is what you did and
+   what it measurably changed." Its value is precisely that it is OLD, so the usual answer to
+   unbounded growth — keep 30 days — would delete the feature to save a rounding error of disk.
+   Measured on this machine: 195 KB across four days of continuous running, about 17 MB a year. So
+   the bound sits where a file stops being a file and becomes a problem, which at that rate is on
+   the order of eight years. Trimming drops to KEEP_LINES so the rewrite happens once per 50k
+   entries rather than on every append.
+   Review ranked this unbounded-but-not-urgent, which is right — it is fixed anyway, because "no
+   urgency" is how a file reaches 4 GB in year three. */
+const MAX_LINES = 200_000;
+const KEEP_LINES = 150_000;
+
 class Outcomes {
-  constructor(dir) {
+  /* @param opts.maxLines/keepLines  overrides for the suite. A test that had to seed 200,000 real
+     rows to reach the ceiling wrote 10 MB per run and leaked it whenever the run was interrupted —
+     on a machine this product's own diagnosis reports as 97% full. Injecting the bound lets the
+     suite exercise the identical code path at a scale that costs nothing, which is the same rule
+     test-reproduce.js states for the stress tool: a suite has no business straining the machine it
+     runs on. */
+  constructor(dir, opts = {}) {
+    this.maxLines = opts.maxLines || MAX_LINES;
+    this.keepLines = opts.keepLines || KEEP_LINES;
     this.file = path.join(dir, 'outcomes.jsonl');
     this.active = {};   // id -> {firedAt, title, sev, m, levers[]}
     this.last = {};     // id -> most recent COMPLETED cycle {firedAt, clearedAt, durSec, m0, m1, levers[]}
+    this._lines = 0;
     this._replay();
   }
 
   _replay() {
     let lines = [];
     try { lines = fs.readFileSync(this.file, 'utf8').split('\n').filter(Boolean); } catch { return; }
+    this._lines = lines.length;
     for (const ln of lines) { let r; try { r = JSON.parse(ln); } catch { continue; } this._fold(r); }
+  }
+
+  /* Oldest-first, and only once the ceiling is crossed. Counted rather than stat-ed, so the common
+     path stays a single append. */
+  _trim() {
+    try {
+      const lines = fs.readFileSync(this.file, 'utf8').split('\n').filter(Boolean);
+      if (lines.length <= this.maxLines) { this._lines = lines.length; return; }
+      const kept = lines.slice(-this.keepLines);
+      fs.writeFileSync(this.file, kept.join('\n') + '\n');
+      this._lines = kept.length;
+      console.error(`[outcomes] ledger reached ${lines.length} entries; trimmed to the most recent ${this.keepLines}`);
+    } catch (e) { console.error('[outcomes] trim failed', e.message); }
   }
 
   _fold(r) {
@@ -62,8 +100,17 @@ class Outcomes {
   }
 
   _write(r) {
-    try { fs.appendFileSync(this.file, JSON.stringify(r) + '\n'); }
-    catch (e) { console.error('[outcomes]', e.message); }
+    try {
+      fs.appendFileSync(this.file, JSON.stringify(r) + '\n');
+      /* THE LINE THAT MAKES THE CEILING REAL, and it was missing for a whole review round. `_trim()`
+         and its constants existed, and the "verification" behind them called `_trim()` directly on a
+         250k-line file — which proves the trimmer works and proves nothing about whether anything
+         ever invokes it. It did not: `_lines` was written at replay and read nowhere, so a ledger
+         at 210k lines took 50 more appends and stayed at 210,050.
+         Testing the function instead of the path is the failure this codebase keeps catching in
+         other people's work; here it shipped a bounded-growth claim on an unbounded file. */
+      if (++this._lines > this.maxLines) this._trim();
+    } catch (e) { console.error('[outcomes]', e.message); }
     this._fold(r);
   }
 
@@ -71,8 +118,21 @@ class Outcomes {
    * delta" column of the ledger. Small on purpose: only values a clear could plausibly move. */
   metricsOf(tick) {
     if (!tick) return {};
-    const c = tick.disk.vols.find((v) => v.id === 'C:') || {};
-    return { cpu: tick.cpu.total, mem: tick.mem.pct, freeGB: c.freeGB, flt: tick.mem.pagesSec || 0 };
+    /* THE SAME SELECTOR THE ENGINE USES, imported rather than re-typed. The line here was
+       `vols.find(v => v.id === 'C:')`, which matches nothing on Linux or macOS - so on those
+       platforms every ledger entry recorded `freeGB: undefined` while looking like a full record,
+       and the "measured delta" column for every disk rule was a subtraction of two holes. */
+    const c = systemVolume(tick) || {};
+    return {
+      cpu: tick.cpu ? tick.cpu.total : null,
+      mem: tick.mem ? tick.mem.pct : null,
+      freeGB: c.freeGB != null ? c.freeGB : null,
+      /* `?? null`, NOT `|| 0`. A hard-fault rate of zero is a real and common reading — an idle
+         machine genuinely faults zero times a second — so `|| 0` collapsed "not measured on this
+         platform" into the single most plausible measurement there is, in the one column the
+         ledger uses to decide whether a fix worked. Null travels; zero lies. */
+      flt: tick.mem && tick.mem.pagesSec != null ? tick.mem.pagesSec : null,
+    };
   }
 
   /* Called with every fresh diagnosis (the bridge runs one every 30 s whether or not any page is
@@ -181,4 +241,4 @@ class Outcomes {
   }
 }
 
-module.exports = { Outcomes };
+module.exports = { Outcomes, MAX_LINES, KEEP_LINES };

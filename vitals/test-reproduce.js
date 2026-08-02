@@ -60,16 +60,29 @@ console.log('\n--- the bounds are bounds, not suggestions ---');
      judged against, and a correctly-sized ballast failed its own check. A budget measured after
      spending it is not a budget. */
   const freeBeforeMB = os.freemem() / 1048576;
+  /* THE CONSTANTS ARE PINNED TO LITERALS FIRST, and that is the whole point of these two lines.
+     Every bound below used to be asserted against the constant imported from the module under test
+     - `remainingSec <= MAX_SEC` - so raising MAX_SEC to 99999 raised the bar with it and the suite
+     stayed green. A section titled "the bounds are bounds, not suggestions" was asserting that the
+     module agrees with itself. A bound is a POLICY; changing it should require changing the test
+     deliberately, which is what a literal forces. */
+  check('the time cap is two minutes, and moving it must break this test', MAX_SEC === 120, MAX_SEC);
+  check('the memory share is a quarter of free, likewise', MAX_MEM_SHARE === 0.25, MAX_MEM_SHARE);
+  check('and the disk cap is 512 MB', MAX_DISK_MB === 512, MAX_DISK_MB);
+
   const started = r.start(profile({ seconds: 99999 }), tick(), { seconds: 99999 });
-  check('a request for forever is capped', started.ok && started.remainingSec <= MAX_SEC,
+  check('a request for forever is capped', started.ok && started.remainingSec <= 120,
     started.remainingSec);
   check('it never takes every core', r.running.workers <= os.cpus().length - 1,
     `${r.running.workers} of ${os.cpus().length}`);
   check('memory ballast is a share of what was FREE, not of what was recorded',
-    r.running.memMB <= Math.round(freeBeforeMB * MAX_MEM_SHARE) + 1,
-    `${r.running.memMB} MB of a ${Math.round(freeBeforeMB * MAX_MEM_SHARE)} MB budget`);
+    r.running.memMB <= Math.round(freeBeforeMB * 0.25) + 1,
+    `${r.running.memMB} MB of a ${Math.round(freeBeforeMB * 0.25)} MB budget`);
   const st = r.status();
-  check('status reports what it is doing', st.running === true && st.workers > 0);
+  check('status reports what it is doing', st.running === true && st.threadsRequested > 0);
+  check('and NAMES the requested figure as requested, never as achieved',
+    'threadsRequested' in st && !('workers' in st),
+    'the old key read as "7 of 8 cores loaded" — a number nothing had measured');
   check('and repeats the caveat in every payload', /resource PRESSURE, not the programs/.test(st.caveat));
   r.stop('test');
   check('stopping releases the ballast', r.running === null);
@@ -115,7 +128,7 @@ console.log('\n--- the disk cap is enforced, and the temp file is cleaned up ---
     const grew = f && fs.existsSync(f);
     const sizeMB = grew ? fs.statSync(f).size / 1048576 : 0;
     check('the temp file is written to', grew, f);
-    check('and never exceeds the hard cap', sizeMB <= MAX_DISK_MB + 2, `${sizeMB.toFixed(1)} MB`);
+    check('and never exceeds the hard cap', sizeMB <= 512 + 2, `${sizeMB.toFixed(1)} MB`);
     r.stop('test');
     check('the temp file is deleted on stop', !fs.existsSync(f), f);
     afterDisk();
@@ -123,26 +136,56 @@ console.log('\n--- the disk cap is enforced, and the temp file is cleaned up ---
 }
 
 function afterDisk() {
-  console.log('\n--- it actually applies load, briefly and on one worker ---');
+  /* THE TWO CHECKS THAT WOULD HAVE CAUGHT THE ORIGINAL BUG, and neither existed.
+   *
+   * The first version burned CPU with setInterval callbacks on the caller's own event loop. Both
+   * failures below are structural, so both assertions are things a single thread CANNOT pass:
+   * serialized callbacks cannot exceed 1.0 cores no matter how many "workers" are claimed, and a
+   * loop busy burning cannot also be servicing timers.
+   *
+   * A moderate target on purpose - 4 threads at 50% duty, about 2 cores - because a suite has no
+   * business saturating the machine it runs on, and 1.3 cores is already impossible to fake. */
+  console.log('\n--- the load is REAL PARALLELISM, which is the bug the first version had ---');
   const r = new Reproducer();
-  /* A modest, short burst: enough to prove the loop runs, bounded so the suite is not itself a
-     stress test. A stress tool that has never been started is not a stress tool. */
-  const p = profile({ cpu: 25, mem: null, io: null });
-  const started = r.start(p, tick(), { seconds: 3 });
+  const p = profile({ cpu: 50, mem: null, io: null });
+  const started = r.start(p, tick(), { seconds: 4 });
   check('it starts', started.ok === true);
-  const t0 = process.cpuUsage();
+  check('more than one thread was asked for', r.running.workers > 1, `${r.running.workers} threads`);
+
+  /* Event-loop lag, sampled while the load runs. This is the "the panel keeps rendering" promise,
+     asserted instead of asserted-in-a-comment: the bridge serves the dashboard off this loop. */
+  let worstLagMs = 0;
+  let due = Date.now() + 25;
+  const lagTimer = setInterval(() => {
+    const now = Date.now();
+    worstLagMs = Math.max(worstLagMs, now - due);
+    due = now + 25;
+  }, 25);
+
   setTimeout(() => {
-    const used = process.cpuUsage(t0);
-    const cpuMs = (used.user + used.system) / 1000;
-    check('measurable CPU was actually burned', cpuMs > 150, `${cpuMs.toFixed(0)} ms of CPU in 1.5 s`);
-    r.stop('test');
+    clearInterval(lagTimer);
+    const st = r.status();
+    check('the load DELIVERS more than one core — impossible on a single event loop',
+      st.deliveredCores > 1.3, `${st.deliveredCores} cores delivered, ${st.deliveredPctOfMachine}% of the machine`);
+    check('and the event loop stays responsive while it does',
+      worstLagMs < 250, `worst timer lag ${worstLagMs} ms (the old version blocked for ~1030 ms)`);
+    check('status reports delivered and requested SEPARATELY, so neither is mistaken for the other',
+      st.deliveredCores != null && st.threadsRequested != null);
+    check('and it repeats the caveat in every payload', /resource PRESSURE, not the programs/.test(st.caveat));
+
+    const s = r.stop('test');
+    check('stop reports what was actually delivered, not what was asked for',
+      typeof s.deliveredCores === 'number' && s.deliveredCores > 1.3, s.deliveredCores);
+
     const after0 = process.cpuUsage();
     setTimeout(() => {
       const idle = process.cpuUsage(after0);
       const idleMs = (idle.user + idle.system) / 1000;
-      check('and it STOPS burning once stopped', idleMs < 120, `${idleMs.toFixed(0)} ms after stop`);
+      /* process.cpuUsage() is process-wide on both platforms, so a worker thread that outlived
+         terminate() would show up here. That is the point of the check. */
+      check('and every thread STOPS burning once stopped', idleMs < 200, `${idleMs.toFixed(0)} ms after stop`);
       console.log(`\n${fail ? fail + ' FAILED of ' : 'all '}${pass + fail} checks${fail ? '' : ' passed'} — the bounds hold, and the load is real.`);
       process.exit(fail ? 1 : 0);
     }, 1200);
-  }, 1500);
+  }, 3000);
 }
